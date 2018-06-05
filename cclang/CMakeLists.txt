@@ -244,6 +244,7 @@ target_link_libraries( ${TARGET_NAME}
                        clangSerialization
                        clangAnalysis
                        LLVMBitReader
+                       ${CMAKE_DL_LIBS}
                       )
 
 if (NOT WIN32)
