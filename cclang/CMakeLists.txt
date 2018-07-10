@@ -6,6 +6,8 @@ cmake_minimum_required(VERSION 2.8.8)
 # `cmake --help-policy CMP0051` for details.
 cmake_policy(SET CMP0051 NEW)
 
+set (CMAKE_CXX_STANDARD 11)
+
 set( REVISION_ID $ENV{REVISION_ID} )
 set( GIT_VERSION $ENV{REVISION} )
 set( GIT_REVISION $ENV{RELEASE_BRANCH} )
@@ -16,12 +18,6 @@ set( PRODUCTVER_MINOR 3 )
 
 math(EXPR BUILDVER_16_BIT_MAJOR "${BUILDVER_WC_REVISION} / 65536")
 math(EXPR BUILDVER_16_BIT_MINOR "${BUILDVER_WC_REVISION} % 65536")
-
-message(STATUS "Current build version is ${BUILDVER_WC_REVISION}")
-message(STATUS "GIT Version: ${GIT_VERSION}")
-message(STATUS "GIT Revision: ${GIT_REVISION}")
-message(STATUS "PRODUCTVER_MAJOR: ${PRODUCTVER_MAJOR}")
-message(STATUS "PRODUCTVER_MINOR: ${PRODUCTVER_MINOR}")
 
 # --------------
 #  write a file with the BUILDVERSION define
@@ -44,6 +40,7 @@ file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/buildversion.h
 if (NOT WIN32)
     add_subdirectory( linux_linker )
 endif()
+
 #
 # Set compiler RTTI options according to the given flag
 #
@@ -115,12 +112,23 @@ if (NOT DEFINED COMMON_CLANG_LIBRARY_NAME)
 endif()
 set(TARGET_NAME ${COMMON_CLANG_LIBRARY_NAME}${BUILD_PLATFORM} )
 
+
+message(STATUS "LLVM_SOURCE_DIR:  ${LLVM_SOURCE_DIR}")
+message(STATUS "CLANG_SOURCE_DIR: ${CLANG_SOURCE_DIR}")
+
 #
 # TblGen the options include file
 #
+
+set(tblgen_dir)
+get_target_property(tblgen_dir llvm-tblgen RUNTIME_OUTPUT_DIRECTORY)
+set(LLVM_TABLEGEN_EXE ${tblgen_dir}/llvm-tblgen)
+message(STATUS "LLVM_TABLEGEN_EXE: ${LLVM_TABLEGEN_EXE}")
+
 set (COMPILE_OPTIONS_TD  opencl_clang_options.td)
 set (COMPILE_OPTIONS_INC opencl_clang_options.inc)
 
+list(APPEND LLVM_TABLEGEN_FLAGS -I ${LLVM_SOURCE_DIR}/include)
 set(LLVM_TARGET_DEFINITIONS ${COMPILE_OPTIONS_TD})
 tablegen(LLVM ${COMPILE_OPTIONS_INC} -gen-opt-parser-defs)
 add_public_tablegen_target(CClangCompileOptions)
@@ -158,11 +166,12 @@ endif()
 #
 
 set(CLANG_BINARY_DIR ${LLVM_BINARY_DIR}/tools/clang/)
-set(CLANG_SOURCE_DIR ${LLVM_MAIN_SRC_DIR}/tools/clang/)
 
 include_directories( AFTER
             ${CLANG_BINARY_DIR}/include # for tablegened includes
             ${CLANG_SOURCE_DIR}/include # for basic headers
+            ${LLVM_BINARY_DIR}/include
+            ${LLVM_SOURCE_DIR}/include
             ${CMAKE_CURRENT_BINARY_DIR}
             ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR}
             )
@@ -172,6 +181,7 @@ link_directories(
 )
 
 add_subdirectory(cl_headers)
+
 
 add_library(${TARGET_NAME} SHARED
     ${TARGET_INCLUDE_FILES}
@@ -195,13 +205,8 @@ install(FILES
 # All duplicate libraries are there on purpose
 target_link_libraries( ${TARGET_NAME}
                        LINK_PRIVATE
-                       LLVMX86CodeGen
-                       LLVMX86AsmPrinter
-                       LLVMX86AsmParser
-                       LLVMX86Desc
-                       LLVMX86Info
-                       LLVMX86Disassembler
                        LLVMAnalysis
+                       LLVMBitReader
                        LLVMCodeGen
                        LLVMCore
                        LLVMipo
@@ -215,35 +220,33 @@ target_link_libraries( ${TARGET_NAME}
                        LLVMSupport
                        LLVMTransformUtils
                        LLVMVectorize
-                       clangBasic
-                       clangDriver
-                       clangFrontend
-                       clangFrontendTool
                        LLVMAsmPrinter
                        LLVMSelectionDAG
-                       LLVMX86Utils
                        LLVMMCDisassembler
-                       clangCodeGen
                        LLVMProfileData
                        LLVMObject
                        LLVMBitWriter
                        LLVMIRReader
                        LLVMAsmParser
                        LLVMTarget
-                       clangRewriteFrontend
+                       clangAnalysis
                        clangARCMigrate
+                       clangAST
+                       clangBasic
+                       clangCodeGen
+                       clangDriver
+                       clangEdit
+                       clangFrontend
+                       clangFrontendTool
+                       clangLex
+                       clangParse
+                       clangRewrite
+                       clangRewriteFrontend
+                       clangSema
+                       clangSerialization
                        clangStaticAnalyzerFrontend
                        clangStaticAnalyzerCheckers
                        clangStaticAnalyzerCore
-                       clangRewrite
-                       clangAST
-                       clangEdit
-                       clangLex
-                       clangParse
-                       clangSema
-                       clangSerialization
-                       clangAnalysis
-                       LLVMBitReader
                        ${CMAKE_DL_LIBS}
                       )
 

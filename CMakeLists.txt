@@ -24,17 +24,17 @@
 # Common clang
 #
 
-project( ocl-fe )
+project(opencl-clang)
 
 cmake_minimum_required(VERSION 2.8)
 
 find_package(Git REQUIRED)
 
-set(LLVM_URL https://github.com/llvm-mirror/llvm.git)
-set(LLVM_BRANCH release_60)
+set(LLVM_URL https://github.com/llvm-mirror/llvm)
+set(LLVM_BRANCH master)
 
-set(CLANG_URL https://github.com/AlexeySotkin/clang)
-set(CLANG_BRANCH ocl-fe-60)
+set(CLANG_URL https://github.com/llvm-mirror/clang)
+set(CLANG_BRANCH master)
 
 set(SPIRV-LLVM_URL https://github.com/KhronosGroup/SPIRV-LLVM-Translator)
 set(SPIRV-LLVM_branch master)
@@ -51,11 +51,12 @@ endfunction()
 git_clone(${LLVM_URL}       ${LLVM_BRANCH}       ${CMAKE_CURRENT_SOURCE_DIR}/llvm)
 git_clone(${CLANG_URL}      ${CLANG_BRANCH}      ${CMAKE_CURRENT_SOURCE_DIR}/llvm/tools/clang)
 git_clone(${SPIRV-LLVM_URL} ${SPIRV-LLVM_branch} ${CMAKE_CURRENT_SOURCE_DIR}/llvm/projects/SPIRV-LLVM-Translator)
-file(COPY ${CMAKE_SOURCE_DIR}/cclang DESTINATION ${CMAKE_CURRENT_SOURCE_DIR}/llvm/projects)
-
 
 if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/llvm")
-    set(LLVM_TARGETS_TO_BUILD "X86" CACHE STRING "X86 only" FORCE)
-    set(BUILD_SHARED_LIBS      TRUE CACHE BOOL   "Create shared libs" FORCE)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/llvm)
+    set(LLVM_TARGETS_TO_BUILD "" CACHE STRING "X86 only")
+    set(BUILD_SHARED_LIBS   TRUE CACHE BOOL   "Create shared libs")
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/llvm EXCLUDE_FROM_ALL)
 endif()
+
+add_subdirectory(cclang)
+
