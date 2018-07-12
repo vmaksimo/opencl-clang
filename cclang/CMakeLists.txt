@@ -112,10 +112,6 @@ if (NOT DEFINED COMMON_CLANG_LIBRARY_NAME)
 endif()
 set(TARGET_NAME ${COMMON_CLANG_LIBRARY_NAME}${BUILD_PLATFORM} )
 
-
-message(STATUS "LLVM_SOURCE_DIR:  ${LLVM_SOURCE_DIR}")
-message(STATUS "CLANG_SOURCE_DIR: ${CLANG_SOURCE_DIR}")
-
 #
 # TblGen the options include file
 #
@@ -229,6 +225,7 @@ target_link_libraries( ${TARGET_NAME}
                        LLVMIRReader
                        LLVMAsmParser
                        LLVMTarget
+                       LLVMSPIRV
                        clangAnalysis
                        clangARCMigrate
                        clangAST
