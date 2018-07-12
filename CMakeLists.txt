@@ -32,25 +32,42 @@ find_package(Git REQUIRED)
 
 set(LLVM_URL https://github.com/llvm-mirror/llvm)
 set(LLVM_BRANCH master)
+set(LLVM_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/llvm)
 
+#set(CLANG_URL https://github.com/AlexeySotkin/clang)
 set(CLANG_URL https://github.com/llvm-mirror/clang)
 set(CLANG_BRANCH master)
+set(CLANG_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/llvm/tools/clang)
 
 set(SPIRV-LLVM_URL https://github.com/KhronosGroup/SPIRV-LLVM-Translator)
 set(SPIRV-LLVM_branch master)
+set(SPIRV-LLVM_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/llvm/projects/SPIRV-LLVM-Translator)
+
+message(STATUS "LLVM_SOURCE_DIR:       ${LLVM_SOURCE_DIR}")
+message(STATUS "CLANG_SOURCE_DIR:      ${CLANG_SOURCE_DIR}")
+message(STATUS "SPIRV-LLVM_SOURCE_DIR: ${SPIRV-LLVM_SOURCE_DIR}")
 
 
 function(git_clone repository branch directory)
     if (NOT EXISTS ${directory})
-        message("Cloning from ${repository}")
+        message("Cloning from `${repository}`")
         execute_process(COMMAND ${GIT_EXECUTABLE} clone --progress --branch ${branch} --single-branch ${repository} ${directory})
     endif()
 endfunction()
 
 
-git_clone(${LLVM_URL}       ${LLVM_BRANCH}       ${CMAKE_CURRENT_SOURCE_DIR}/llvm)
-git_clone(${CLANG_URL}      ${CLANG_BRANCH}      ${CMAKE_CURRENT_SOURCE_DIR}/llvm/tools/clang)
-git_clone(${SPIRV-LLVM_URL} ${SPIRV-LLVM_branch} ${CMAKE_CURRENT_SOURCE_DIR}/llvm/projects/SPIRV-LLVM-Translator)
+function(apply_patches repo_dir patches_dir)
+  message(STATUS "${GIT_EXECUTABLE} am ${patches_dir}/0001-Split-opencl-c.h-into-separate-headers-for-OpenCL-1..patch")
+  #execute_process(COMMAND ${GIT_EXECUTABLE} --work-tree=${repo_dir} --git-dir=${repo_dir}/.git am ${patches_dir}/0001-Split-opencl-c.h-into-separate-headers-for-OpenCL-1..patch
+    execute_process(COMMAND ${GIT_EXECUTABLE} am ${patches_dir}/0001-Split-opencl-c.h-into-separate-headers-for-OpenCL-1..patch
+    WORKING_DIRECTORY ${repo_dir})
+endfunction()
+
+git_clone(${LLVM_URL} ${LLVM_BRANCH} ${LLVM_SOURCE_DIR})
+git_clone(${SPIRV-LLVM_URL} ${SPIRV-LLVM_branch} ${SPIRV-LLVM_SOURCE_DIR})
+git_clone(${CLANG_URL} ${CLANG_BRANCH} ${CLANG_SOURCE_DIR})
+
+apply_patches(${CLANG_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/clang_patches)
 
 if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/llvm")
     set(LLVM_TARGETS_TO_BUILD "" CACHE STRING "X86 only")
