@@ -112,6 +112,21 @@ if (NOT DEFINED COMMON_CLANG_LIBRARY_NAME)
 endif()
 set(TARGET_NAME ${COMMON_CLANG_LIBRARY_NAME}${BUILD_PLATFORM} )
 
+
+find_package(Git REQUIRED)
+
+function(apply_patches repo_dir patches_dir)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} am --3way ${patches_dir}/clang_patches.mbox
+        WORKING_DIRECTORY ${repo_dir})
+endfunction()
+
+message("apply_patches(${CLANG_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})")
+
+set(CLANG_SOURCE_DIR ${LLVM_SOURCE_DIR}/tools/clang)
+apply_patches(${CLANG_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
+
+
 #
 # TblGen the options include file
 #
@@ -225,7 +240,7 @@ target_link_libraries( ${TARGET_NAME}
                        LLVMIRReader
                        LLVMAsmParser
                        LLVMTarget
-                       LLVMSPIRV
+#                       LLVMSPIRVLib
                        clangAnalysis
                        clangARCMigrate
                        clangAST
