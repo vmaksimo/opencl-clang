@@ -1,79 +1,267 @@
-#
-#  Copyright (c) 2018, Intel Corporation
-# 
-#  Permission is hereby granted, free of charge, to any person obtaining a
-#  copy of this software and associated documentation files (the "Software"),
-#  to deal in the Software without restriction, including without limitation
-#  the rights to use, copy, modify, merge, publish, distribute, sublicense,
-#  and/or sell copies of the Software, and to permit persons to whom the
-#  Software is furnished to do so, subject to the following conditions:
-# 
-#  The above copyright notice and this permission notice shall be included
-#  in all copies or substantial portions of the Software.
-# 
-#  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
-#  OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-#  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-#  THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
-#  OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
-#  ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
-#  OTHER DEALINGS IN THE SOFTWARE.
-#
+project( common_clang )
+cmake_minimum_required(VERSION 2.8.8)
+
+# Do not omit TARGET_OBJECTS expression from the SOURCES target
+# property
+# `cmake --help-policy CMP0051` for details.
+cmake_policy(SET CMP0051 NEW)
+
+set (CMAKE_CXX_STANDARD 11)
+
+set( REVISION_ID $ENV{REVISION_ID} )
+set( GIT_VERSION $ENV{REVISION} )
+set( GIT_REVISION $ENV{RELEASE_BRANCH} )
+math( EXPR BUILDVER_WC_REVISION "6 * 65536" )
+
+set( PRODUCTVER_MAJOR 4 )
+set( PRODUCTVER_MINOR 3 )
+
+math(EXPR BUILDVER_16_BIT_MAJOR "${BUILDVER_WC_REVISION} / 65536")
+math(EXPR BUILDVER_16_BIT_MINOR "${BUILDVER_WC_REVISION} % 65536")
+
+# --------------
+#  write a file with the BUILDVERSION define
+file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/buildversion.h
+"
+#define BUILDVERSION ${BUILDVER_WC_REVISION}
+#ifndef _DEBUG
+    #define BUILDVERSIONSTR \"(Build\ ${BUILDVER_WC_REVISION})\"
+#else
+    #define BUILDVERSIONSTR \"(Build[DEBUG]\ ${BUILDVER_WC_REVISION})\"
+#endif
+#define PRODUCTVERSION_MAJOR ${PRODUCTVER_MAJOR}
+#define PRODUCTVERSION_MINOR ${PRODUCTVER_MINOR}
+#define BUILDVERSION16BIT_MAJOR ${BUILDVER_16_BIT_MAJOR}
+#define BUILDVERSION16BIT_MINOR ${BUILDVER_16_BIT_MINOR}
+#define VERSIONSTRING \"${PRODUCTVER_MAJOR}.${PRODUCTVER_MINOR}.${BUILDVER_16_BIT_MAJOR}.${BUILDVER_16_BIT_MINOR}\"
+")
+# --------------
+
+if (NOT WIN32)
+    add_subdirectory( linux_linker )
+endif()
 
 #
-# Common clang
+# Set compiler RTTI options according to the given flag
 #
+macro(use_rtti val)
+    if( CMAKE_COMPILER_IS_GNUCXX OR "${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
+        if( ${val} )
+            llvm_replace_compiler_option(CMAKE_CXX_FLAGS "-fno-rtti" "-frtti")
+        else()
+            llvm_replace_compiler_option(CMAKE_CXX_FLAGS "-frtti" "-fno-rtti" )
+        endif()
+    else(MSVC)
+        if( ${val} )
+            llvm_replace_compiler_option(CMAKE_CXX_FLAGS "/GR-" "/GR")
+        else()
+            llvm_replace_compiler_option(CMAKE_CXX_FLAGS "/GR" "/GR-" )
+        endif()
+    endif()
+    set( CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}" PARENT_SCOPE )
+endmacro(use_rtti)
 
-project(opencl-clang)
+#
+# Set compiler Exception Handling options according to the given flag
+#
+macro(use_eh val)
+    if( CMAKE_COMPILER_IS_GNUCXX OR "${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
+        if( ${val} )
+            remove_definitions( -fno-exceptions )
+        else()
+            add_definitions( -fno-exceptions )
+        endif()
+    else(MSVC)
+        if( ${val} )
+              llvm_replace_compiler_option(CMAKE_CXX_FLAGS "/EHs-c-" "/EHsc" )
+              add_definitions( /D_HAS_EXCEPTIONS=1 )
+        else()
+              llvm_replace_compiler_option(CMAKE_CXX_FLAGS "/EHsc" "/EHs-c-")
+              add_definitions( /D_HAS_EXCEPTIONS=0 )
+        endif()
+    endif()
+endmacro(use_eh)
 
-cmake_minimum_required(VERSION 2.8)
+macro(catFiles outFileName)
+    file(WRITE ${outFileName} "")
+    foreach(file ${ARGN})
+        file(READ ${file} CONTENT)
+        file(APPEND ${outFileName} "${CONTENT}")
+    endforeach(file)
+endmacro(catFiles)
+
+use_eh(TRUE)
+use_rtti(FALSE)
+
+if (CMAKE_SIZEOF_VOID_P EQUAL 4)
+    set(ADDR 32)
+else ()
+    set(ADDR 64)
+endif (CMAKE_SIZEOF_VOID_P EQUAL 4)
+
+# set windows binary suffix
+if (WIN32)
+    set (BUILD_PLATFORM ${ADDR})
+else (WIN32)
+    set (BUILD_PLATFORM "")
+endif (WIN32)
+
+# set that name of the main output file as a target name
+if (NOT DEFINED COMMON_CLANG_LIBRARY_NAME)
+    set(COMMON_CLANG_LIBRARY_NAME common_clang)
+endif()
+set(TARGET_NAME ${COMMON_CLANG_LIBRARY_NAME}${BUILD_PLATFORM} )
+
 
 find_package(Git REQUIRED)
 
-set(LLVM_URL https://github.com/llvm-mirror/llvm)
-set(LLVM_BRANCH master)
-set(LLVM_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/llvm)
-
-#set(CLANG_URL https://github.com/AlexeySotkin/clang)
-set(CLANG_URL https://github.com/llvm-mirror/clang)
-set(CLANG_BRANCH master)
-set(CLANG_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/llvm/tools/clang)
-
-set(SPIRV-LLVM_URL https://github.com/KhronosGroup/SPIRV-LLVM-Translator)
-set(SPIRV-LLVM_branch master)
-set(SPIRV-LLVM_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/llvm/projects/SPIRV-LLVM-Translator)
-
-message(STATUS "LLVM_SOURCE_DIR:       ${LLVM_SOURCE_DIR}")
-message(STATUS "CLANG_SOURCE_DIR:      ${CLANG_SOURCE_DIR}")
-message(STATUS "SPIRV-LLVM_SOURCE_DIR: ${SPIRV-LLVM_SOURCE_DIR}")
-
-
-function(git_clone repository branch directory)
-    if (NOT EXISTS ${directory})
-        message("Cloning from `${repository}`")
-        execute_process(COMMAND ${GIT_EXECUTABLE} clone --progress --branch ${branch} --single-branch ${repository} ${directory})
-    endif()
-endfunction()
-
-
 function(apply_patches repo_dir patches_dir)
-  message(STATUS "${GIT_EXECUTABLE} am ${patches_dir}/0001-Split-opencl-c.h-into-separate-headers-for-OpenCL-1..patch")
-  #execute_process(COMMAND ${GIT_EXECUTABLE} --work-tree=${repo_dir} --git-dir=${repo_dir}/.git am ${patches_dir}/0001-Split-opencl-c.h-into-separate-headers-for-OpenCL-1..patch
-    execute_process(COMMAND ${GIT_EXECUTABLE} am ${patches_dir}/0001-Split-opencl-c.h-into-separate-headers-for-OpenCL-1..patch
-    WORKING_DIRECTORY ${repo_dir})
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} am --3way ${patches_dir}/clang_patches.mbox
+        WORKING_DIRECTORY ${repo_dir})
 endfunction()
 
-git_clone(${LLVM_URL} ${LLVM_BRANCH} ${LLVM_SOURCE_DIR})
-git_clone(${SPIRV-LLVM_URL} ${SPIRV-LLVM_branch} ${SPIRV-LLVM_SOURCE_DIR})
-git_clone(${CLANG_URL} ${CLANG_BRANCH} ${CLANG_SOURCE_DIR})
+message("apply_patches(${CLANG_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})")
 
-apply_patches(${CLANG_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/clang_patches)
+set(CLANG_SOURCE_DIR ${LLVM_SOURCE_DIR}/tools/clang)
+apply_patches(${CLANG_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
 
-if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/llvm")
-    set(LLVM_TARGETS_TO_BUILD "" CACHE STRING "X86 only")
-    set(BUILD_SHARED_LIBS   TRUE CACHE BOOL   "Create shared libs")
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/llvm EXCLUDE_FROM_ALL)
+
+#
+# TblGen the options include file
+#
+
+set(tblgen_dir)
+get_target_property(tblgen_dir llvm-tblgen RUNTIME_OUTPUT_DIRECTORY)
+set(LLVM_TABLEGEN_EXE ${tblgen_dir}/llvm-tblgen)
+message(STATUS "LLVM_TABLEGEN_EXE: ${LLVM_TABLEGEN_EXE}")
+
+set (COMPILE_OPTIONS_TD  opencl_clang_options.td)
+set (COMPILE_OPTIONS_INC opencl_clang_options.inc)
+
+list(APPEND LLVM_TABLEGEN_FLAGS -I ${LLVM_SOURCE_DIR}/include)
+set(LLVM_TARGET_DEFINITIONS ${COMPILE_OPTIONS_TD})
+tablegen(LLVM ${COMPILE_OPTIONS_INC} -gen-opt-parser-defs)
+add_public_tablegen_target(CClangCompileOptions)
+
+#
+# Source code
+#
+set(TARGET_INCLUDE_FILES
+    exceptions.h
+    common_clang.h
+    options.h
+    binary_result.h
+    pch_mgr.h
+    ${COMPILE_OPTIONS_TD}
+    ${COMPILE_OPTIONS_INC}
+)
+
+set(TARGET_SOURCE_FILES
+    common_clang.cpp
+    common_clang.rc
+    options.cpp
+    pch_mgr.cpp
+    options_compile.cpp
+)
+
+add_definitions( -D__STDC_LIMIT_MACROS )
+add_definitions( -D__STDC_CONSTANT_MACROS )
+add_definitions( -DCOMMON_CLANG_EXPORTS )
+if (NOT WIN32)
+    add_definitions( -DLIBCOMMON_CLANG_NAME="lib${COMMON_CLANG_LIBRARY_NAME}.so")
 endif()
 
-add_subdirectory(cclang)
+#
+# Include directories
+#
 
+set(CLANG_BINARY_DIR ${LLVM_BINARY_DIR}/tools/clang/)
+
+include_directories( AFTER
+            ${CLANG_BINARY_DIR}/include # for tablegened includes
+            ${CLANG_SOURCE_DIR}/include # for basic headers
+            ${LLVM_BINARY_DIR}/include
+            ${LLVM_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_BINARY_DIR}
+            ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR}
+            )
+
+link_directories(
+    ${LLVM_LIBRARY_DIRS}
+)
+
+add_subdirectory(cl_headers)
+
+
+add_library(${TARGET_NAME} SHARED
+    ${TARGET_INCLUDE_FILES}
+    ${TARGET_SOURCE_FILES}
+    $<TARGET_OBJECTS:cl_headers>
+)
+
+add_dependencies(${TARGET_NAME} CClangCompileOptions)
+
+install(TARGETS ${TARGET_NAME}
+    RUNTIME DESTINATION bin
+    ARCHIVE DESTINATION lib
+    LIBRARY DESTINATION lib)
+
+install(FILES
+        common_clang.h
+        DESTINATION include/cclang)
+
+# The list of clang libraries is taken from clang makefile
+# (build/tools/clang/tools/driver/CMakeFiles/clang.dir/build.make)
+# All duplicate libraries are there on purpose
+target_link_libraries( ${TARGET_NAME}
+                       LINK_PRIVATE
+                       LLVMAnalysis
+                       LLVMBitReader
+                       LLVMCodeGen
+                       LLVMCore
+                       LLVMipo
+                       LLVMInstCombine
+                       LLVMInstrumentation
+                       LLVMMC
+                       LLVMMCParser
+                       LLVMObjCARCOpts
+                       LLVMOption
+                       LLVMScalarOpts
+                       LLVMSupport
+                       LLVMTransformUtils
+                       LLVMVectorize
+                       LLVMAsmPrinter
+                       LLVMSelectionDAG
+                       LLVMMCDisassembler
+                       LLVMProfileData
+                       LLVMObject
+                       LLVMBitWriter
+                       LLVMIRReader
+                       LLVMAsmParser
+                       LLVMTarget
+#                       LLVMSPIRVLib
+                       clangAnalysis
+                       clangARCMigrate
+                       clangAST
+                       clangBasic
+                       clangCodeGen
+                       clangDriver
+                       clangEdit
+                       clangFrontend
+                       clangFrontendTool
+                       clangLex
+                       clangParse
+                       clangRewrite
+                       clangRewriteFrontend
+                       clangSema
+                       clangSerialization
+                       clangStaticAnalyzerFrontend
+                       clangStaticAnalyzerCheckers
+                       clangStaticAnalyzerCore
+                       ${CMAKE_DL_LIBS}
+                      )
+
+if (NOT WIN32)
+    list(APPEND LINK_LIBS pthread)
+endif ()
