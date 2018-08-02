@@ -116,15 +116,15 @@ set(TARGET_NAME ${COMMON_CLANG_LIBRARY_NAME}${BUILD_PLATFORM} )
 find_package(Git REQUIRED)
 
 function(apply_patches repo_dir patches_dir)
+    file(GLOB patches ${patches_dir}/*.patch)
+    list(SORT patches)
     execute_process(
-        COMMAND ${GIT_EXECUTABLE} am --3way ${patches_dir}/clang_patches.mbox
+        COMMAND ${GIT_EXECUTABLE} am --3way ${patches}
         WORKING_DIRECTORY ${repo_dir})
 endfunction()
 
-message("apply_patches(${CLANG_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})")
-
 set(CLANG_SOURCE_DIR ${LLVM_SOURCE_DIR}/tools/clang)
-apply_patches(${CLANG_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
+apply_patches(${CLANG_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/patches/clang)
 
 
 #

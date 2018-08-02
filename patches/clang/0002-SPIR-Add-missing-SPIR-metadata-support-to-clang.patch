@@ -1,0 +1,546 @@
+From ad9d09092e3c694117bf33544616850c40dae55b Mon Sep 17 00:00:00 2001
+From: Alexey Sotkin <alexey.sotkin@intel.com>
+Date: Thu, 2 Aug 2018 14:12:43 +0300
+Subject: [PATCH 2/2] [SPIR] Add missing SPIR metadata support to clang
+
+* Added intel specific cl_spir_compile_options.
+
+* Fixed detecting of images core feature,
+image depth and msaa extensions were used in a module.
+
+* Updated mechanism which detects features were used to correctly handle
+image types with access qualifiers.
+
+Change-Id: Ice412397a584f6feb9cbabed246b384bddc6e4ea
+---
+ include/clang/Driver/Options.td                  |   2 +
+ include/clang/Frontend/CodeGenOptions.h          |   4 +
+ lib/CodeGen/CMakeLists.txt                       |   1 +
+ lib/CodeGen/CodeGenModule.cpp                    |   5 +
+ lib/CodeGen/intel/CGSPIRMetadataAdder.cpp        | 320 +++++++++++++++++++++++
+ lib/CodeGen/intel/CGSPIRMetadataAdder.h          |  26 ++
+ lib/Frontend/CompilerInvocation.cpp              |   2 +
+ test/CodeGenOpenCL/intel-spir-compile-options.cl |   6 +
+ test/CodeGenOpenCL/intel-used-features-images.cl |  61 +++++
+ 9 files changed, 427 insertions(+)
+ create mode 100644 lib/CodeGen/intel/CGSPIRMetadataAdder.cpp
+ create mode 100644 lib/CodeGen/intel/CGSPIRMetadataAdder.h
+ create mode 100644 test/CodeGenOpenCL/intel-spir-compile-options.cl
+ create mode 100644 test/CodeGenOpenCL/intel-used-features-images.cl
+
+diff --git a/include/clang/Driver/Options.td b/include/clang/Driver/Options.td
+index 2470638..8badff7 100644
+--- a/include/clang/Driver/Options.td
++++ b/include/clang/Driver/Options.td
+@@ -530,6 +530,8 @@ def cl_fp32_correctly_rounded_divide_sqrt : Flag<["-"], "cl-fp32-correctly-round
+   HelpText<"OpenCL only. Specify that single precision floating-point divide and sqrt used in the program source are correctly rounded.">;
+ def cl_uniform_work_group_size : Flag<["-"], "cl-uniform-work-group-size">, Group<opencl_Group>, Flags<[CC1Option]>,
+   HelpText<"OpenCL only. Defines that the global work-size be a multiple of the work-group size specified to clEnqueueNDRangeKernel">;
++def cl_spir_compile_options : Separate<["-"], "cl-spir-compile-options">, Group<opencl_Group>, Flags<[CC1Option]>,
++  HelpText<"SPIR compilation options to record in metadata">;
+ def client__name : JoinedOrSeparate<["-"], "client_name">;
+ def combine : Flag<["-", "--"], "combine">, Flags<[DriverOption, Unsupported]>;
+ def compatibility__version : JoinedOrSeparate<["-"], "compatibility_version">;
+diff --git a/include/clang/Frontend/CodeGenOptions.h b/include/clang/Frontend/CodeGenOptions.h
+index a6d061a..0c5949e 100644
+--- a/include/clang/Frontend/CodeGenOptions.h
++++ b/include/clang/Frontend/CodeGenOptions.h
+@@ -210,6 +210,10 @@ public:
+   /// CUDA runtime back-end for incorporating them into host-side object file.
+   std::string CudaGpuBinaryFileName;
+ 
++  /// OpenCL compile options passeds with -cl-spir-compile-options to embed in
++  /// the SPIR metadata.
++  std::string SPIRCompileOptions;
++
+   /// The name of the file to which the backend should save YAML optimization
+   /// records.
+   std::string OptRecordFile;
+diff --git a/lib/CodeGen/CMakeLists.txt b/lib/CodeGen/CMakeLists.txt
+index 2a0f4f0..1315e74 100644
+--- a/lib/CodeGen/CMakeLists.txt
++++ b/lib/CodeGen/CMakeLists.txt
+@@ -92,6 +92,7 @@ add_clang_library(clangCodeGen
+   SwiftCallingConv.cpp
+   TargetInfo.cpp
+   VarBypassDetector.cpp
++  intel/CGSPIRMetadataAdder.cpp
+ 
+   DEPENDS
+   ${codegen_deps}
+diff --git a/lib/CodeGen/CodeGenModule.cpp b/lib/CodeGen/CodeGenModule.cpp
+index 8c5e0df..80c2736 100644
+--- a/lib/CodeGen/CodeGenModule.cpp
++++ b/lib/CodeGen/CodeGenModule.cpp
+@@ -44,6 +44,7 @@
+ #include "clang/CodeGen/ConstantInitBuilder.h"
+ #include "clang/Frontend/CodeGenOptions.h"
+ #include "clang/Sema/SemaDiagnostic.h"
++#include "intel/CGSPIRMetadataAdder.h"
+ #include "llvm/ADT/Triple.h"
+ #include "llvm/Analysis/TargetLibraryInfo.h"
+ #include "llvm/IR/CallSite.h"
+@@ -573,6 +574,10 @@ void CodeGenModule::Release() {
+   if (getCodeGenOpts().EmitVersionIdentMetadata)
+     EmitVersionIdentMetadata();
+ 
++  if (llvm::StringRef(TheModule.getTargetTriple()).startswith("spir"))
++    addSPIRMetadata(TheModule, getLangOpts().OpenCLVersion,
++                    getCodeGenOpts().SPIRCompileOptions);
++
+   EmitTargetMetadata();
+ }
+ 
+diff --git a/lib/CodeGen/intel/CGSPIRMetadataAdder.cpp b/lib/CodeGen/intel/CGSPIRMetadataAdder.cpp
+new file mode 100644
+index 0000000..44122e8
+--- /dev/null
++++ b/lib/CodeGen/intel/CGSPIRMetadataAdder.cpp
+@@ -0,0 +1,320 @@
++//===- SPIRMetadataAdder.cpp - Add SPIR related module scope metadata -----===//
++//
++// Copyright (C) 2015-2017 Intel Corporation. All rights reserved.
++//
++// The information and source code contained herein is the exclusive property
++// of Intel Corporation and may not be disclosed, examined or reproduced in
++// whole or in part without explicit written authorization from the company.
++//
++//===----------------------------------------------------------------------===//
++
++#include "CGSPIRMetadataAdder.h"
++#include "llvm/ADT/STLExtras.h"
++#include "llvm/ADT/SmallSet.h"
++#include "llvm/IR/Constants.h"
++#include "llvm/IR/DerivedTypes.h"
++#include "llvm/IR/Function.h"
++#include "llvm/IR/InstIterator.h"
++#include "llvm/IR/Instructions.h"
++#include "llvm/IR/Module.h"
++#include "llvm/IR/Type.h"
++#include "llvm/IR/TypeFinder.h"
++#include "llvm/Transforms/IPO.h"
++#include <sstream>
++
++using namespace llvm;
++using namespace clang;
++using namespace CodeGen;
++
++static const char *ImageTypeNames[] = {"opencl.image1d_ro_t",
++                                       "opencl.image1d_wo_t",
++                                       "opencl.image1d_rw_t",
++                                       "opencl.image1d_array_ro_t",
++                                       "opencl.image1d_array_wo_t",
++                                       "opencl.image1d_array_rw_t",
++                                       "opencl.image1d_buffer_ro_t",
++                                       "opencl.image1d_buffer_wo_t",
++                                       "opencl.image1d_buffer_rw_t",
++                                       "opencl.image2d_ro_t",
++                                       "opencl.image2d_wo_t",
++                                       "opencl.image2d_rw_t",
++                                       "opencl.image2d_array_ro_t",
++                                       "opencl.image2d_array_wo_t",
++                                       "opencl.image2d_array_rw_t",
++                                       "opencl.image2d_depth_ro_t",
++                                       "opencl.image2d_depth_wo_t",
++                                       "opencl.image2d_depth_rw_t",
++                                       "opencl.image2d_array_depth_ro_t",
++                                       "opencl.image2d_array_depth_wo_t",
++                                       "opencl.image2d_array_depth_rw_t",
++                                       "opencl.image2d_msaa_ro_t",
++                                       "opencl.image2d_msaa_wo_t",
++                                       "opencl.image2d_msaa_rw_t",
++                                       "opencl.image2d_array_msaa_ro_t",
++                                       "opencl.image2d_array_msaa_wo_t",
++                                       "opencl.image2d_array_msaa_rw_t",
++                                       "opencl.image2d_msaa_depth_ro_t",
++                                       "opencl.image2d_msaa_depth_wo_t",
++                                       "opencl.image2d_msaa_depth_rw_t",
++                                       "opencl.image2d_array_msaa_depth_ro_t",
++                                       "opencl.image2d_array_msaa_depth_wo_t",
++                                       "opencl.image2d_array_msaa_depth_rw_t",
++                                       "opencl.image3d_ro_t",
++                                       "opencl.image3d_wo_t",
++                                       "opencl.image3d_rw_t"};
++
++static const char *ImageDepthTypeNames[] = {
++    "opencl.image2d_depth_ro_t",       "opencl.image2d_depth_wo_t",
++    "opencl.image2d_depth_rw_t",       "opencl.image2d_array_depth_ro_t",
++    "opencl.image2d_array_depth_wo_t", "opencl.image2d_array_depth_rw_t"};
++
++static const char *ImageMSAATypeNames[] = {
++    "opencl.image2d_msaa_ro_t",
++    "opencl.image2d_msaa_wo_t",
++    "opencl.image2d_msaa_rw_t",
++    "opencl.image2d_array_msaa_ro_t",
++    "opencl.image2d_array_msaa_wo_t",
++    "opencl.image2d_array_msaa_rw_t",
++    "opencl.image2d_msaa_depth_ro_t",
++    "opencl.image2d_msaa_depth_wo_t",
++    "opencl.image2d_msaa_depth_rw_t",
++    "opencl.image2d_array_msaa_depth_ro_t",
++    "opencl.image2d_array_msaa_depth_wo_t",
++    "opencl.image2d_array_msaa_depth_rw_t"};
++
++struct OCLExtensionsTy {
++#define OPENCLEXT(nm) unsigned _##nm : 1;
++#include "clang/Basic/OpenCLExtensions.def"
++
++OCLExtensionsTy() {
++#define OPENCLEXT(nm) _##nm = 0;
++#include "clang/Basic/OpenCLExtensions.def"
++  }
++};
++
++typedef void (*func_call_handler)(CallInst *CI, OCLExtensionsTy &Exts);
++
++void baseAtomics64(CallInst *CI, OCLExtensionsTy &Exts) {
++  auto *FirstArgTy = dyn_cast<PointerType>(CI->getArgOperand(0)->getType());
++
++  if (FirstArgTy && FirstArgTy->getPointerElementType()->isIntegerTy() &&
++      FirstArgTy->getPointerElementType()->getScalarSizeInBits() == 64)
++    Exts._cl_khr_int64_base_atomics = 1;
++}
++
++void extAtomics64(CallInst *CI, OCLExtensionsTy &Exts) {
++  auto *FirstArgTy = dyn_cast<PointerType>(CI->getArgOperand(0)->getType());
++
++  if (FirstArgTy && FirstArgTy->getPointerElementType()->isIntegerTy() &&
++      FirstArgTy->getPointerElementType()->getScalarSizeInBits() == 64)
++    Exts._cl_khr_int64_extended_atomics = 1;
++}
++
++void image3DWrite(CallInst *CI, OCLExtensionsTy &Exts) {
++  auto *FirstArgTy = dyn_cast<PointerType>(CI->getArgOperand(0)->getType());
++
++  if (FirstArgTy && FirstArgTy->getPointerElementType()->isStructTy() &&
++      !FirstArgTy->getPointerElementType()->getStructName().compare(
++          "opencl.image3d_t"))
++    Exts._cl_khr_3d_image_writes = 1;
++}
++
++typedef struct {
++  const char *FuncName;
++  func_call_handler Handler;
++} FuncCallHandlersTy;
++
++static const FuncCallHandlersTy FuncCallHandlers[] = {
++    {"_Z8atom_add", baseAtomics64},     {"_Z8atom_sub", baseAtomics64},
++    {"_Z9atom_xchg", baseAtomics64},    {"_Z8atom_inc", baseAtomics64},
++    {"_Z8atom_dec", baseAtomics64},     {"_Z12atom_cmpxchg", baseAtomics64},
++    {"_Z8atom_min", extAtomics64},      {"_Z8atom_max", extAtomics64},
++    {"_Z8atom_and", extAtomics64},      {"_Z7atom_or", extAtomics64},
++    {"_Z8atom_xor", extAtomics64},      {"_Z12write_imagef", image3DWrite},
++    {"_Z12write_imagei", image3DWrite}, {"_Z13write_imageui", image3DWrite}};
++
++static bool searchTypeInType(llvm::Type *Ty1, llvm::Type *Ty2, bool IgnorePtrs);
++
++static bool searchTypeInType(llvm::Type *Ty1, llvm::Type *Ty2, bool IgnorePtrs,
++                             SmallSet<llvm::Type *, 16> &TypesList) {
++  if (Ty1 == Ty2)
++    return true;
++
++  if (Ty1->isVectorTy())
++    return searchTypeInType(Ty1->getVectorElementType(), Ty2, IgnorePtrs,
++                            TypesList);
++
++  if (Ty1->isArrayTy())
++    return searchTypeInType(Ty1->getArrayElementType(), Ty2, IgnorePtrs,
++                            TypesList);
++
++  if (!IgnorePtrs && Ty1->isPointerTy()) {
++    // prevent infinte loop (such as a struct that conatins a pointer to itself)
++    if (TypesList.count(Ty1->getPointerElementType()) > 0)
++      return false;
++
++    return searchTypeInType(Ty1->getPointerElementType(), Ty2, IgnorePtrs,
++                            TypesList);
++  }
++
++  if (Ty1->isStructTy()) {
++    TypesList.insert(Ty1);
++    auto *StrTy = dyn_cast<llvm::StructType>(Ty1);
++
++    for (auto *ElemTy : StrTy->elements())
++      if (searchTypeInType(ElemTy, Ty2, IgnorePtrs, TypesList))
++        return true;
++  }
++
++  if (Ty1->isFunctionTy()) {
++    TypesList.insert(Ty1);
++    auto *FuncTy = dyn_cast<llvm::FunctionType>(Ty1);
++
++    if (searchTypeInType(FuncTy->getReturnType(), Ty2, IgnorePtrs))
++      return true;
++
++    for (auto *PTy : FuncTy->params())
++      if (searchTypeInType(PTy, Ty2, IgnorePtrs))
++        return true;
++  }
++
++  return false;
++}
++
++static bool searchTypeInType(llvm::Type *Ty1, llvm::Type *Ty2,
++                             bool IgnorePtrs) {
++  SmallSet<llvm::Type *, 16> TypesList;
++  return searchTypeInType(Ty1, Ty2, IgnorePtrs, TypesList);
++}
++
++static void functionAddSPIRMetadata(Function &F, bool &bUseDoubles,
++                                    OCLExtensionsTy &sUsedExts);
++
++void clang::CodeGen::addSPIRMetadata(Module &M, int OCLVersion,
++                                     std::string SPIROptions) {
++  Type *DoubleTy = Type::getDoubleTy(M.getContext());
++  Type *HalfTy = Type::getHalfTy(M.getContext());
++
++  OCLExtensionsTy UsedExts;
++
++  bool UseDoubles = false;
++  bool UseImages = false;
++
++  for (auto &G : M.globals()) {
++    if (searchTypeInType(G.getType(), DoubleTy, false))
++      UseDoubles = true;
++    if (searchTypeInType(G.getType(), HalfTy, true))
++      UsedExts._cl_khr_fp16 = true;
++  }
++
++  // check if image types are defined
++  for (size_t i = 0;
++       i < sizeof(ImageTypeNames) / sizeof(ImageTypeNames[0]); i++) {
++    if (M.getTypeByName(ImageTypeNames[i])) {
++      UseImages = true;
++      break;
++    }
++  }
++
++  // check if depth image types are defined
++  for (size_t i = 0;
++       i < sizeof(ImageDepthTypeNames) / sizeof(ImageDepthTypeNames[0]); i++) {
++    if (M.getTypeByName(ImageDepthTypeNames[i])) {
++      UsedExts._cl_khr_depth_images = true;
++      break;
++    }
++  }
++
++  // check if msaa image types are defined
++  for (size_t i = 0;
++       i < sizeof(ImageMSAATypeNames) / sizeof(ImageMSAATypeNames[0]); i++) {
++    if (M.getTypeByName(ImageMSAATypeNames[i])) {
++      UsedExts._cl_khr_gl_msaa_sharing = true;
++      break;
++    }
++  }
++
++  // scan all functions
++  for (auto &F : M.functions()) {
++    functionAddSPIRMetadata(F, UseDoubles, UsedExts);
++  }
++
++  // Add used extensions
++  SmallVector<llvm::Metadata *, 5> OCLExtElts;
++
++#define OPENCLEXT(nm)                                                          \
++  if (UsedExts._##nm)                                                         \
++    OCLExtElts.push_back(llvm::MDString::get(M.getContext(), #nm));
++#include "clang/Basic/OpenCLExtensions.def"
++
++  NamedMDNode *OCLExtMD =
++      M.getOrInsertNamedMetadata("opencl.used.extensions");
++
++  OCLExtMD->addOperand(MDNode::get(M.getContext(), OCLExtElts));
++
++  // Add used optional core features
++  SmallVector<Metadata *, 5> OCLOptCoreElts;
++
++  if (UseDoubles)
++    OCLOptCoreElts.push_back(MDString::get(M.getContext(), "cl_doubles"));
++
++  if (UseImages)
++    OCLOptCoreElts.push_back(MDString::get(M.getContext(), "cl_images"));
++
++  NamedMDNode *OptCoreMD =
++      M.getOrInsertNamedMetadata("opencl.used.optional.core.features");
++  OptCoreMD->addOperand(MDNode::get(M.getContext(), OCLOptCoreElts));
++
++  // Add build options
++  NamedMDNode *OCLCompOptsMD =
++      M.getOrInsertNamedMetadata("opencl.compiler.options");
++  SmallVector<llvm::Metadata *, 5> OCLBuildOptions;
++
++  std::stringstream SOpts(SPIROptions);
++  std::string SOpt;
++  while (SOpts >> SOpt)
++    OCLBuildOptions.push_back(MDString::get(M.getContext(), SOpt));
++  OCLCompOptsMD->addOperand(MDNode::get(M.getContext(), OCLBuildOptions));
++}
++
++static void functionAddSPIRMetadata(Function &F, bool &UseDoubles,
++                                    OCLExtensionsTy &UsedExts) {
++  Type *DoubleTy = Type::getDoubleTy(F.getParent()->getContext());
++  Type *HalfTy = Type::getHalfTy(F.getParent()->getContext());
++
++  for (const auto &Arg : F.args()) {
++    if (searchTypeInType(Arg.getType(), DoubleTy, false))
++      UseDoubles = true;
++    if (searchTypeInType(Arg.getType(), HalfTy, true))
++      UsedExts._cl_khr_fp16 = true;
++  }
++
++  for (auto &I : instructions(F)) {
++    if (searchTypeInType(I.getType(), DoubleTy, false))
++      if (!(dyn_cast<FPExtInst>(&I)))
++        UseDoubles = true;
++    if (searchTypeInType(I.getType(), HalfTy, true))
++      UsedExts._cl_khr_fp16 = true;
++
++    for (auto *Op : I.operand_values()){
++      if (searchTypeInType(Op->getType(), DoubleTy, false))
++        if (!(dyn_cast<CallInst>(&I) &&
++              dyn_cast<CallInst>(&I)->getCalledFunction() &&
++              dyn_cast<CallInst>(&I)->getCalledFunction()->isVarArg()))
++          UseDoubles = true;
++      if (searchTypeInType(Op->getType(), HalfTy, true))
++        UsedExts._cl_khr_fp16 = true;
++    }
++
++    auto *CI = dyn_cast<CallInst>(&I);
++    if (CI && CI->getCalledFunction()) {
++      StringRef FName = CI->getCalledFunction()->getName();
++
++      for (size_t i = 0;
++           i < sizeof(FuncCallHandlers) / sizeof(FuncCallHandlers[0]); i++) {
++        if (FName.equals(FuncCallHandlers[i].FuncName))
++          FuncCallHandlers[i].Handler(CI, UsedExts);
++      }
++    }
++  }
++}
+diff --git a/lib/CodeGen/intel/CGSPIRMetadataAdder.h b/lib/CodeGen/intel/CGSPIRMetadataAdder.h
+new file mode 100644
+index 0000000..2de83cd
+--- /dev/null
++++ b/lib/CodeGen/intel/CGSPIRMetadataAdder.h
+@@ -0,0 +1,26 @@
++//===- SPIRMetadataAdder.h - Add SPIR related module scope metadata -------===//
++//
++// Copyright (C) 2015-2017 Intel Corporation. All rights reserved.
++//
++// The information and source code contained herein is the exclusive property
++// of Intel Corporation and may not be disclosed, examined or reproduced in
++// whole or in part without explicit written authorization from the company.
++//
++//===----------------------------------------------------------------------===//
++
++#include "llvm/IR/Module.h"
++#include <string>
++
++#ifndef CLANG_CODEGEN_SPIRMETADATAADDER_H
++#define CLANG_CODEGEN_SPIRMETADATAADDER_H
++
++namespace clang {
++
++namespace CodeGen {
++
++  void addSPIRMetadata(llvm::Module &M, int OCLVersion,
++                       std::string SPIROptions);
++
++} // end namespace CodeGen
++} // end namespace clang
++#endif
+diff --git a/lib/Frontend/CompilerInvocation.cpp b/lib/Frontend/CompilerInvocation.cpp
+index 78e6bab..d316759 100644
+--- a/lib/Frontend/CompilerInvocation.cpp
++++ b/lib/Frontend/CompilerInvocation.cpp
+@@ -1125,6 +1125,8 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
+ 
+   Opts.Addrsig = Args.hasArg(OPT_faddrsig);
+ 
++  Opts.SPIRCompileOptions = Args.getLastArgValue(OPT_cl_spir_compile_options);
++
+   return Success;
+ }
+ 
+diff --git a/test/CodeGenOpenCL/intel-spir-compile-options.cl b/test/CodeGenOpenCL/intel-spir-compile-options.cl
+new file mode 100644
+index 0000000..e01a0f2f
+--- /dev/null
++++ b/test/CodeGenOpenCL/intel-spir-compile-options.cl
+@@ -0,0 +1,6 @@
++// RUN: %clang_cc1 %s -cl-std=CL1.2 -emit-llvm -o - -triple spir-unknown-unknown -cl-spir-compile-options "-cl-mad-enable -cl-denorms-are-zero" | FileCheck %s
++
++// CHECK: !opencl.compiler.options = !{[[OPT:![0-9]+]]}
++// CHECK: [[OPT]] = !{!"-cl-mad-enable", !"-cl-denorms-are-zero"}
++
++kernel void foo(void);
+diff --git a/test/CodeGenOpenCL/intel-used-features-images.cl b/test/CodeGenOpenCL/intel-used-features-images.cl
+new file mode 100644
+index 0000000..893476d
+--- /dev/null
++++ b/test/CodeGenOpenCL/intel-used-features-images.cl
+@@ -0,0 +1,61 @@
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=read_only  -DIMAGE_TYPE=image1d_t -O0 -emit-llvm -o - | FileCheck %s
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=write_only -DIMAGE_TYPE=image1d_t -O0 -emit-llvm -o - | FileCheck %s
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=read_write -DIMAGE_TYPE=image1d_t -O0 -emit-llvm -o - | FileCheck %s
++//
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=read_only  -DIMAGE_TYPE=image1d_array_t -O0 -emit-llvm -o - | FileCheck %s
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=write_only -DIMAGE_TYPE=image1d_array_t -O0 -emit-llvm -o - | FileCheck %s
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=read_write -DIMAGE_TYPE=image1d_array_t -O0 -emit-llvm -o - | FileCheck %s
++//
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=read_only  -DIMAGE_TYPE=image1d_buffer_t -O0 -emit-llvm -o - | FileCheck %s
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=write_only -DIMAGE_TYPE=image1d_buffer_t -O0 -emit-llvm -o - | FileCheck %s
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=read_write -DIMAGE_TYPE=image1d_buffer_t -O0 -emit-llvm -o - | FileCheck %s
++//
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=read_only  -DIMAGE_TYPE=image2d_t -O0 -emit-llvm -o - | FileCheck %s
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=write_only -DIMAGE_TYPE=image2d_t -O0 -emit-llvm -o - | FileCheck %s
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=read_write -DIMAGE_TYPE=image2d_t -O0 -emit-llvm -o - | FileCheck %s
++//
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=read_only  -DIMAGE_TYPE=image2d_array_t -O0 -emit-llvm -o - | FileCheck %s
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=write_only -DIMAGE_TYPE=image2d_array_t -O0 -emit-llvm -o - | FileCheck %s
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=read_write -DIMAGE_TYPE=image2d_array_t -O0 -emit-llvm -o - | FileCheck %s
++//
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=read_only  -DIMAGE_TYPE=image2d_depth_t -O0 -emit-llvm -o - | FileCheck --check-prefix=CHECK --check-prefix=CHECK-NON-OPT-DEPTH %s
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=write_only -DIMAGE_TYPE=image2d_depth_t -O0 -emit-llvm -o - | FileCheck --check-prefix=CHECK --check-prefix=CHECK-NON-OPT-DEPTH %s
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=read_write -DIMAGE_TYPE=image2d_depth_t -O0 -emit-llvm -o - | FileCheck --check-prefix=CHECK --check-prefix=CHECK-NON-OPT-DEPTH %s
++//
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=read_only  -DIMAGE_TYPE=image2d_array_depth_t -O0 -emit-llvm -o - | FileCheck --check-prefix=CHECK --check-prefix=CHECK-NON-OPT-DEPTH %s
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=write_only -DIMAGE_TYPE=image2d_array_depth_t -O0 -emit-llvm -o - | FileCheck --check-prefix=CHECK --check-prefix=CHECK-NON-OPT-DEPTH %s
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=read_write -DIMAGE_TYPE=image2d_array_depth_t -O0 -emit-llvm -o - | FileCheck --check-prefix=CHECK --check-prefix=CHECK-NON-OPT-DEPTH %s
++//
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=read_only  -DIMAGE_TYPE=image2d_msaa_t -O0 -emit-llvm -o - | FileCheck --check-prefix=CHECK --check-prefix=CHECK-NON-OPT-MSAA %s
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=write_only -DIMAGE_TYPE=image2d_msaa_t -O0 -emit-llvm -o - | FileCheck --check-prefix=CHECK --check-prefix=CHECK-NON-OPT-MSAA %s
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=read_write -DIMAGE_TYPE=image2d_msaa_t -O0 -emit-llvm -o - | FileCheck --check-prefix=CHECK --check-prefix=CHECK-NON-OPT-MSAA %s
++//
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=read_only  -DIMAGE_TYPE=image2d_array_msaa_t -O0 -emit-llvm -o - | FileCheck --check-prefix=CHECK --check-prefix=CHECK-NON-OPT-MSAA %s
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=write_only -DIMAGE_TYPE=image2d_array_msaa_t -O0 -emit-llvm -o - | FileCheck --check-prefix=CHECK --check-prefix=CHECK-NON-OPT-MSAA %s
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=read_write -DIMAGE_TYPE=image2d_array_msaa_t -O0 -emit-llvm -o - | FileCheck --check-prefix=CHECK --check-prefix=CHECK-NON-OPT-MSAA %s
++//
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=read_only  -DIMAGE_TYPE=image2d_msaa_depth_t -O0 -emit-llvm -o - | FileCheck --check-prefix=CHECK --check-prefix=CHECK-NON-OPT-MSAA %s
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=write_only -DIMAGE_TYPE=image2d_msaa_depth_t -O0 -emit-llvm -o - | FileCheck --check-prefix=CHECK --check-prefix=CHECK-NON-OPT-MSAA %s
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=read_write -DIMAGE_TYPE=image2d_msaa_depth_t -O0 -emit-llvm -o - | FileCheck --check-prefix=CHECK --check-prefix=CHECK-NON-OPT-MSAA %s
++//
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=read_only  -DIMAGE_TYPE=image2d_array_msaa_depth_t -O0 -emit-llvm -o - | FileCheck --check-prefix=CHECK --check-prefix=CHECK-NON-OPT-MSAA %s
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=write_only -DIMAGE_TYPE=image2d_array_msaa_depth_t -O0 -emit-llvm -o - | FileCheck --check-prefix=CHECK --check-prefix=CHECK-NON-OPT-MSAA %s
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=read_write -DIMAGE_TYPE=image2d_array_msaa_depth_t -O0 -emit-llvm -o - | FileCheck --check-prefix=CHECK --check-prefix=CHECK-NON-OPT-MSAA %s
++//
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=read_only  -DIMAGE_TYPE=image3d_t -O0 -emit-llvm -o - | FileCheck %s
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=write_only -DIMAGE_TYPE=image3d_t -O0 -emit-llvm -o - | FileCheck %s
++// RUN: %clang_cc1 %s -cl-std=CL2.0 -triple spir -DACCESS_QUALIFIER=read_write -DIMAGE_TYPE=image3d_t -O0 -emit-llvm -o - | FileCheck %s
++
++#pragma OPENCL EXTENSION cl_khr_depth_images : enable
++#pragma OPENCL EXTENSION cl_khr_gl_msaa_sharing : enable
++
++kernel void test_read_image(ACCESS_QUALIFIER IMAGE_TYPE img) {}
++
++// CHECK-DAG: !opencl.used.optional.core.features = !{![[MD:[0-9]+]]}
++// CHECK-DAG: ![[MD]] = !{!"cl_images"}
++//
++// CHECK-NON-OPT-DEPTH-DAG: !opencl.used.extensions = !{![[MD:[0-9]+]]}
++// CHECK-NON-OPT-DEPTH-DAG: ![[MD]] = !{!"cl_khr_depth_images"}
++//
++// CHECK-NON-OPT-MSAA-DAG: !opencl.used.extensions = !{![[MD:[0-9]+]]}
++// CHECK-NON-OPT-MSAA-DAG: ![[MD]] = !{!"cl_khr_gl_msaa_sharing"}
+-- 
+2.7.4
+
