@@ -1,0 +1,166 @@
+From 18b44c2e77e182ba7b3fb9dbd8e85a5880ea30cb Mon Sep 17 00:00:00 2001
+From: Alexey Sotkin <alexey.sotkin@intel.com>
+Date: Sun, 26 Aug 2018 16:09:46 +0300
+Subject: [PATCH 1/2] Downgrade to LLVM 5.0 level
+
+Affected entities
+* target_link_libraries function in CMakeLists.txt
+* Memory intrinsics API
+* WriteBitcodeToFile API
+* ToolOutputFile class name
+---
+ lib/SPIRV/SPIRVLowerMemmove.cpp | 9 ++++-----
+ lib/SPIRV/SPIRVReader.cpp       | 6 +++---
+ lib/SPIRV/SPIRVUtil.cpp         | 4 ++--
+ lib/SPIRV/SPIRVWriter.cpp       | 5 +----
+ tools/llvm-spirv/CMakeLists.txt | 2 +-
+ tools/llvm-spirv/llvm-spirv.cpp | 8 ++++----
+ 6 files changed, 15 insertions(+), 19 deletions(-)
+
+diff --git a/lib/SPIRV/SPIRVLowerMemmove.cpp b/lib/SPIRV/SPIRVLowerMemmove.cpp
+index 04be327..03efb7d 100644
+--- a/lib/SPIRV/SPIRVLowerMemmove.cpp
++++ b/lib/SPIRV/SPIRVLowerMemmove.cpp
+@@ -80,7 +80,7 @@ public:
+       // The source could be bit-cast from another type,
+       // need the original type for the allocation of the temporary variable
+       SrcTy = cast<BitCastInst>(Src)->getOperand(0)->getType();
+-    auto Align = I.getSourceAlignment();
++    auto Align = I.getAlignment();
+     auto Volatile = I.isVolatile();
+     Value *NumElements = nullptr;
+     uint64_t ElementsCount = 1;
+@@ -96,11 +96,10 @@ public:
+ 
+     auto *Alloca =
+         Builder.CreateAlloca(SrcTy->getPointerElementType(), NumElements);
+-    Alloca->setAlignment(Align);
+     Builder.CreateLifetimeStart(Alloca);
+-    Builder.CreateMemCpy(Alloca, Align, Src, Align, Length, Volatile);
+-    auto *SecondCpy = Builder.CreateMemCpy(Dest, I.getDestAlignment(), Alloca,
+-                                           Align, Length, Volatile);
++    Builder.CreateMemCpy(Alloca, Src, Length, Align, Volatile);
++    auto *SecondCpy = Builder.CreateMemCpy(Dest, Alloca, Length, Align,
++        Volatile);
+     Builder.CreateLifetimeEnd(Alloca);
+ 
+     SecondCpy->takeName(&I);
+diff --git a/lib/SPIRV/SPIRVReader.cpp b/lib/SPIRV/SPIRVReader.cpp
+index 6799b2d..00176af 100644
+--- a/lib/SPIRV/SPIRVReader.cpp
++++ b/lib/SPIRV/SPIRVReader.cpp
+@@ -1627,7 +1627,7 @@ Value *SPIRVToLLVM::transValueWithoutDecoration(SPIRVValue *BV, Function *F,
+     }
+     if (!CI) {
+       llvm::Value *Src = transValue(BC->getSource(), F, BB);
+-      CI = Builder.CreateMemCpy(Dst, Align, Src, Align, Size, IsVolatile);
++      CI = Builder.CreateMemCpy(Dst, Src, Size, Align, IsVolatile);
+     }
+     if (isFuncNoUnwind())
+       CI->getFunction()->addFnAttr(Attribute::NoUnwind);
+@@ -2200,8 +2200,8 @@ Value *SPIRVToLLVM::transEnqueuedBlock(SPIRVValue *SInvoke,
+ 
+     // We can't make any guesses about type of captured data, so
+     // let's copy it through memcpy
+-    Builder.CreateMemCpy(CapturedGEPCast, LCaptAlignment->getZExtValue(),
+-                         LCaptured, LCaptAlignment->getZExtValue(), LCaptSize,
++    Builder.CreateMemCpy(CapturedGEPCast, LCaptured, LCaptSize,
++                         LCaptAlignment->getZExtValue(),
+                          SCaptured->isVolatile());
+ 
+     // Fix invoke function to correctly process its first argument
+diff --git a/lib/SPIRV/SPIRVUtil.cpp b/lib/SPIRV/SPIRVUtil.cpp
+index a056303..cb0f188 100644
+--- a/lib/SPIRV/SPIRVUtil.cpp
++++ b/lib/SPIRV/SPIRVUtil.cpp
+@@ -99,13 +99,13 @@ Value *removeCast(Value *V) {
+ 
+ void saveLLVMModule(Module *M, const std::string &OutputFile) {
+   std::error_code EC;
+-  ToolOutputFile Out(OutputFile.c_str(), EC, sys::fs::F_None);
++  tool_output_file Out(OutputFile.c_str(), EC, sys::fs::F_None);
+   if (EC) {
+     SPIRVDBG(errs() << "Fails to open output file: " << EC.message();)
+     return;
+   }
+ 
+-  WriteBitcodeToFile(*M, Out.os());
++  WriteBitcodeToFile(M, Out.os());
+   Out.keep();
+ }
+ 
+diff --git a/lib/SPIRV/SPIRVWriter.cpp b/lib/SPIRV/SPIRVWriter.cpp
+index 8ea4250..f4a5d71 100644
+--- a/lib/SPIRV/SPIRVWriter.cpp
++++ b/lib/SPIRV/SPIRVWriter.cpp
+@@ -1242,7 +1242,7 @@ SPIRVValue *LLVMToSPIRV::transIntrinsicInst(IntrinsicInst *II,
+                                             SPIRVBasicBlock *BB) {
+   auto GetMemoryAccess = [](MemIntrinsic *MI) -> std::vector<SPIRVWord> {
+     std::vector<SPIRVWord> MemoryAccess(1, MemoryAccessMaskNone);
+-    if (SPIRVWord AlignVal = MI->getDestAlignment()) {
++    if (SPIRVWord AlignVal = MI->getAlignment()) {
+       MemoryAccess[0] |= MemoryAccessAlignedMask;
+       MemoryAccess.push_back(AlignVal);
+     }
+@@ -1299,9 +1299,6 @@ SPIRVValue *LLVMToSPIRV::transIntrinsicInst(IntrinsicInst *II,
+                                       GetMemoryAccess(MSI), BB);
+   } break;
+   case Intrinsic::memcpy:
+-    assert(cast<MemCpyInst>(II)->getSourceAlignment() ==
+-               cast<MemCpyInst>(II)->getDestAlignment() &&
+-           "Alignment mismatch!");
+     return BM->addCopyMemorySizedInst(
+         transValue(II->getOperand(0), BB), transValue(II->getOperand(1), BB),
+         transValue(II->getOperand(2), BB),
+diff --git a/tools/llvm-spirv/CMakeLists.txt b/tools/llvm-spirv/CMakeLists.txt
+index ce092a4..891b15c 100644
+--- a/tools/llvm-spirv/CMakeLists.txt
++++ b/tools/llvm-spirv/CMakeLists.txt
+@@ -14,7 +14,7 @@ add_llvm_tool(llvm-spirv
+   NO_INSTALL_RPATH
+ )
+ 
+-target_link_libraries(llvm-spirv PRIVATE LLVMSPIRVLib)
++target_link_libraries(llvm-spirv LLVMSPIRVLib)
+ 
+ target_include_directories(llvm-spirv
+   PRIVATE
+diff --git a/tools/llvm-spirv/llvm-spirv.cpp b/tools/llvm-spirv/llvm-spirv.cpp
+index 8ca1e4e..d0b4ba0 100644
+--- a/tools/llvm-spirv/llvm-spirv.cpp
++++ b/tools/llvm-spirv/llvm-spirv.cpp
+@@ -175,13 +175,13 @@ static int convertSPIRVToLLVM() {
+   }
+ 
+   std::error_code EC;
+-  ToolOutputFile Out(OutputFile.c_str(), EC, sys::fs::F_None);
++  tool_output_file Out(OutputFile.c_str(), EC, sys::fs::F_None);
+   if (EC) {
+     errs() << "Fails to open output file: " << EC.message();
+     return -1;
+   }
+ 
+-  WriteBitcodeToFile(*M, Out.os());
++  WriteBitcodeToFile(M, Out.os());
+   Out.keep();
+   delete M;
+   return 0;
+@@ -246,13 +246,13 @@ static int regularizeLLVM() {
+   }
+ 
+   std::error_code EC;
+-  ToolOutputFile Out(OutputFile.c_str(), EC, sys::fs::F_None);
++  tool_output_file Out(OutputFile.c_str(), EC, sys::fs::F_None);
+   if (EC) {
+     errs() << "Fails to open output file: " << EC.message();
+     return -1;
+   }
+ 
+-  WriteBitcodeToFile(*M.get(), Out.os());
++  WriteBitcodeToFile(M.get(), Out.os());
+   Out.keep();
+   return 0;
+ }
+-- 
+1.8.3.1
+

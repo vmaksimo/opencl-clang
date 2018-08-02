@@ -1,0 +1,765 @@
+From 3e53f644c4880c51d3f774e349ea3928cdbf7911 Mon Sep 17 00:00:00 2001
+From: Alexey Sotkin <alexey.sotkin@intel.com>
+Date: Sun, 26 Aug 2018 16:59:15 +0300
+Subject: [PATCH 2/2] Revert "Rename DEBUG macro to LLVM_DEBUG."
+
+This reverts commit ebc2625f1df6c873ad16fad8f8cc65689b5071f4.
+---
+ lib/SPIRV/OCL20To12.cpp            |  8 +++---
+ lib/SPIRV/OCL20ToSPIRV.cpp         | 20 ++++++-------
+ lib/SPIRV/OCL21ToSPIRV.cpp         | 14 ++++-----
+ lib/SPIRV/OCLTypeToSPIRV.cpp       | 15 +++++-----
+ lib/SPIRV/OCLUtil.cpp              |  2 +-
+ lib/SPIRV/SPIRVLowerBool.cpp       |  2 +-
+ lib/SPIRV/SPIRVLowerConstExpr.cpp  |  6 ++--
+ lib/SPIRV/SPIRVLowerMemmove.cpp    |  2 +-
+ lib/SPIRV/SPIRVLowerSPIRBlocks.cpp | 29 +++++++++----------
+ lib/SPIRV/SPIRVReader.cpp          |  9 +++---
+ lib/SPIRV/SPIRVRegularizeLLVM.cpp  |  8 +++---
+ lib/SPIRV/SPIRVToOCL20.cpp         | 10 +++----
+ lib/SPIRV/SPIRVUtil.cpp            | 58 ++++++++++++++++++--------------------
+ lib/SPIRV/SPIRVWriter.cpp          |  4 +--
+ lib/SPIRV/TransOCLMD.cpp           |  6 ++--
+ tools/llvm-spirv/llvm-spirv.cpp    |  2 +-
+ 16 files changed, 95 insertions(+), 100 deletions(-)
+
+diff --git a/lib/SPIRV/OCL20To12.cpp b/lib/SPIRV/OCL20To12.cpp
+index 6cf6f69..3ad60d9 100644
+--- a/lib/SPIRV/OCL20To12.cpp
++++ b/lib/SPIRV/OCL20To12.cpp
+@@ -85,18 +85,18 @@ bool OCL20To12::runOnModule(Module &Module) {
+   Ctx = &M->getContext();
+   visit(*M);
+ 
+-  LLVM_DEBUG(dbgs() << "After OCL20To12:\n" << *M);
++  DEBUG(dbgs() << "After OCL20To12:\n" << *M);
+ 
+   std::string Err;
+   raw_string_ostream ErrorOS(Err);
+   if (verifyModule(*M, &ErrorOS)) {
+-    LLVM_DEBUG(errs() << "Fails to verify module: " << ErrorOS.str());
++    DEBUG(errs() << "Fails to verify module: " << ErrorOS.str());
+   }
+   return true;
+ }
+ 
+ void OCL20To12::visitCallInst(CallInst &CI) {
+-  LLVM_DEBUG(dbgs() << "[visistCallInst] " << CI << '\n');
++  DEBUG(dbgs() << "[visistCallInst] " << CI << '\n');
+   auto F = CI.getCalledFunction();
+   if (!F)
+     return;
+@@ -105,7 +105,7 @@ void OCL20To12::visitCallInst(CallInst &CI) {
+   std::string DemangledName;
+   if (!oclIsBuiltin(MangledName, &DemangledName))
+     return;
+-  LLVM_DEBUG(dbgs() << "DemangledName = " << DemangledName.c_str() << '\n');
++  DEBUG(dbgs() << "DemangledName = " << DemangledName.c_str() << '\n');
+ 
+   if (DemangledName == kOCLBuiltinName::AtomicWorkItemFence) {
+     visitCallAtomicWorkItemFence(&CI);
+diff --git a/lib/SPIRV/OCL20ToSPIRV.cpp b/lib/SPIRV/OCL20ToSPIRV.cpp
+index a8b8e8c..050f68c 100644
+--- a/lib/SPIRV/OCL20ToSPIRV.cpp
++++ b/lib/SPIRV/OCL20ToSPIRV.cpp
+@@ -338,7 +338,7 @@ bool OCL20ToSPIRV::runOnModule(Module &Module) {
+   if (CLVer > kOCLVer::CL20)
+     return false;
+ 
+-  LLVM_DEBUG(dbgs() << "Enter OCL20ToSPIRV:\n");
++  DEBUG(dbgs() << "Enter OCL20ToSPIRV:\n");
+ 
+   transWorkItemBuiltinsToVariables();
+ 
+@@ -351,12 +351,12 @@ bool OCL20ToSPIRV::runOnModule(Module &Module) {
+     if (auto GV = dyn_cast<GlobalValue>(I))
+       GV->eraseFromParent();
+ 
+-  LLVM_DEBUG(dbgs() << "After OCL20ToSPIRV:\n" << *M);
++  DEBUG(dbgs() << "After OCL20ToSPIRV:\n" << *M);
+ 
+   std::string Err;
+   raw_string_ostream ErrorOS(Err);
+   if (verifyModule(*M, &ErrorOS)) {
+-    LLVM_DEBUG(errs() << "Fails to verify module: " << ErrorOS.str());
++    DEBUG(errs() << "Fails to verify module: " << ErrorOS.str());
+   }
+   return true;
+ }
+@@ -365,7 +365,7 @@ bool OCL20ToSPIRV::runOnModule(Module &Module) {
+ // Workgroup functions need to be handled before pipe functions since
+ // there are functions fall into both categories.
+ void OCL20ToSPIRV::visitCallInst(CallInst &CI) {
+-  LLVM_DEBUG(dbgs() << "[visistCallInst] " << CI << '\n');
++  DEBUG(dbgs() << "[visistCallInst] " << CI << '\n');
+   auto F = CI.getCalledFunction();
+   if (!F)
+     return;
+@@ -375,7 +375,7 @@ void OCL20ToSPIRV::visitCallInst(CallInst &CI) {
+   if (!oclIsBuiltin(MangledName, &DemangledName))
+     return;
+ 
+-  LLVM_DEBUG(dbgs() << "DemangledName: " << DemangledName << '\n');
++  DEBUG(dbgs() << "DemangledName: " << DemangledName << '\n');
+   if (DemangledName.find(kOCLBuiltinName::NDRangePrefix) == 0) {
+     visitCallNDRange(&CI, DemangledName);
+     return;
+@@ -1177,20 +1177,20 @@ void OCL20ToSPIRV::visitCallBuiltinSimple(CallInst *CI, StringRef MangledName,
+ /// Function like get_global_id(i) -> x = load GlobalInvocationId; extract x, i
+ /// Function like get_work_dim() -> load WorkDim
+ void OCL20ToSPIRV::transWorkItemBuiltinsToVariables() {
+-  LLVM_DEBUG(dbgs() << "Enter transWorkItemBuiltinsToVariables\n");
++  DEBUG(dbgs() << "Enter transWorkItemBuiltinsToVariables\n");
+   std::vector<Function *> WorkList;
+   for (auto &I : *M) {
+     std::string DemangledName;
+     if (!oclIsBuiltin(I.getName(), &DemangledName))
+       continue;
+-    LLVM_DEBUG(dbgs() << "Function demangled name: " << DemangledName << '\n');
++    DEBUG(dbgs() << "Function demangled name: " << DemangledName << '\n');
+     std::string BuiltinVarName;
+     SPIRVBuiltinVariableKind BVKind;
+     if (!SPIRSPIRVBuiltinVariableMap::find(DemangledName, &BVKind))
+       continue;
+     BuiltinVarName =
+         std::string(kSPIRVName::Prefix) + SPIRVBuiltInNameMap::map(BVKind);
+-    LLVM_DEBUG(dbgs() << "builtin variable name: " << BuiltinVarName << '\n');
++    DEBUG(dbgs() << "builtin variable name: " << BuiltinVarName << '\n');
+     bool IsVec = I.getFunctionType()->getNumParams() > 0;
+     Type *GVType =
+         IsVec ? VectorType::get(I.getReturnType(), 3) : I.getReturnType();
+@@ -1202,11 +1202,11 @@ void OCL20ToSPIRV::transWorkItemBuiltinsToVariables() {
+       auto CI = dyn_cast<CallInst>(*UI);
+       assert(CI && "invalid instruction");
+       Value *NewValue = new LoadInst(BV, "", CI);
+-      LLVM_DEBUG(dbgs() << "Transform: " << *CI << " => " << *NewValue << '\n');
++      DEBUG(dbgs() << "Transform: " << *CI << " => " << *NewValue << '\n');
+       if (IsVec) {
+         NewValue =
+             ExtractElementInst::Create(NewValue, CI->getArgOperand(0), "", CI);
+-        LLVM_DEBUG(dbgs() << *NewValue << '\n');
++        DEBUG(dbgs() << *NewValue << '\n');
+       }
+       NewValue->takeName(CI);
+       CI->replaceAllUsesWith(NewValue);
+diff --git a/lib/SPIRV/OCL21ToSPIRV.cpp b/lib/SPIRV/OCL21ToSPIRV.cpp
+index c4d3c7d..3306c1f 100644
+--- a/lib/SPIRV/OCL21ToSPIRV.cpp
++++ b/lib/SPIRV/OCL21ToSPIRV.cpp
+@@ -113,7 +113,7 @@ bool OCL21ToSPIRV::runOnModule(Module &Module) {
+   if (CLVer < kOCLVer::CL21)
+     return false;
+ 
+-  LLVM_DEBUG(dbgs() << "Enter OCL21ToSPIRV:\n");
++  DEBUG(dbgs() << "Enter OCL21ToSPIRV:\n");
+   visit(*M);
+ 
+   for (auto &I : ValuesToDelete)
+@@ -123,11 +123,11 @@ bool OCL21ToSPIRV::runOnModule(Module &Module) {
+     if (auto GV = dyn_cast<GlobalValue>(I))
+       GV->eraseFromParent();
+ 
+-  LLVM_DEBUG(dbgs() << "After OCL21ToSPIRV:\n" << *M);
++  DEBUG(dbgs() << "After OCL21ToSPIRV:\n" << *M);
+   std::string Err;
+   raw_string_ostream ErrorOS(Err);
+   if (verifyModule(*M, &ErrorOS)) {
+-    LLVM_DEBUG(errs() << "Fails to verify module: " << ErrorOS.str());
++    DEBUG(errs() << "Fails to verify module: " << ErrorOS.str());
+   }
+   return true;
+ }
+@@ -136,7 +136,7 @@ bool OCL21ToSPIRV::runOnModule(Module &Module) {
+ // Workgroup functions need to be handled before pipe functions since
+ // there are functions fall into both categories.
+ void OCL21ToSPIRV::visitCallInst(CallInst &CI) {
+-  LLVM_DEBUG(dbgs() << "[visistCallInst] " << CI << '\n');
++  DEBUG(dbgs() << "[visistCallInst] " << CI << '\n');
+   auto F = CI.getCalledFunction();
+   if (!F)
+     return;
+@@ -153,13 +153,13 @@ void OCL21ToSPIRV::visitCallInst(CallInst &CI) {
+ 
+   if (!oclIsBuiltin(MangledName, &DemangledName, true))
+     return;
+-  LLVM_DEBUG(dbgs() << "DemangledName:" << DemangledName << '\n');
++  DEBUG(dbgs() << "DemangledName:" << DemangledName << '\n');
+   StringRef Ref(DemangledName);
+ 
+   Op OC = OpNop;
+   if (!OpCodeNameMap::rfind(Ref.str(), &OC))
+     return;
+-  LLVM_DEBUG(dbgs() << "maps to opcode " << OC << '\n');
++  DEBUG(dbgs() << "maps to opcode " << OC << '\n');
+ 
+   if (isCvtOpCode(OC)) {
+     visitCallConvert(&CI, MangledName, OC);
+@@ -207,7 +207,7 @@ void OCL21ToSPIRV::visitCallDecorate(CallInst *CI, StringRef MangledName) {
+ }
+ 
+ void OCL21ToSPIRV::visitCallSubGroupBarrier(CallInst *CI) {
+-  LLVM_DEBUG(dbgs() << "[visitCallSubGroupBarrier] " << *CI << '\n');
++  DEBUG(dbgs() << "[visitCallSubGroupBarrier] " << *CI << '\n');
+   auto Lit = getBarrierLiterals(CI);
+   AttributeList Attrs = CI->getCalledFunction()->getAttributes();
+   mutateCallInstSPIRV(M, CI,
+diff --git a/lib/SPIRV/OCLTypeToSPIRV.cpp b/lib/SPIRV/OCLTypeToSPIRV.cpp
+index 32f5a0b..67f555a 100644
+--- a/lib/SPIRV/OCLTypeToSPIRV.cpp
++++ b/lib/SPIRV/OCLTypeToSPIRV.cpp
+@@ -70,7 +70,7 @@ void OCLTypeToSPIRV::getAnalysisUsage(AnalysisUsage &AU) const {
+ }
+ 
+ bool OCLTypeToSPIRV::runOnModule(Module &Module) {
+-  LLVM_DEBUG(dbgs() << "Enter OCLTypeToSPIRV:\n");
++  DEBUG(dbgs() << "Enter OCLTypeToSPIRV:\n");
+   M = &Module;
+   Ctx = &M->getContext();
+   auto Src = getSPIRVSource(&Module);
+@@ -96,15 +96,14 @@ bool OCLTypeToSPIRV::runOnModule(Module &Module) {
+ }
+ 
+ void OCLTypeToSPIRV::addAdaptedType(Value *V, Type *T) {
+-  LLVM_DEBUG(dbgs() << "[add adapted type] ";
+-             V->printAsOperand(dbgs(), true, M);
+-             dbgs() << " => " << *T << '\n');
++  DEBUG(dbgs() << "[add adapted type] "; V->printAsOperand(dbgs(), true, M);
++        dbgs() << " => " << *T << '\n');
+   AdaptedTy[V] = T;
+ }
+ 
+ void OCLTypeToSPIRV::addWork(Function *F) {
+-  LLVM_DEBUG(dbgs() << "[add work] "; F->printAsOperand(dbgs(), true, M);
+-             dbgs() << '\n');
++  DEBUG(dbgs() << "[add work] "; F->printAsOperand(dbgs(), true, M);
++        dbgs() << '\n');
+   WorkSet.insert(F);
+ }
+ 
+@@ -137,8 +136,8 @@ static Argument *getArg(Function *F, unsigned I) {
+ /// Create a new function type if \param F has arguments in AdaptedTy, and
+ /// propagates the adapted arguments to functions called by \param F.
+ void OCLTypeToSPIRV::adaptFunction(Function *F) {
+-  LLVM_DEBUG(dbgs() << "\n[work on function] ";
+-             F->printAsOperand(dbgs(), true, M); dbgs() << '\n');
++  DEBUG(dbgs() << "\n[work on function] "; F->printAsOperand(dbgs(), true, M);
++        dbgs() << '\n');
+   assert(AdaptedTy.count(F) == 0);
+ 
+   std::vector<Type *> ArgTys;
+diff --git a/lib/SPIRV/OCLUtil.cpp b/lib/SPIRV/OCLUtil.cpp
+index 83e2182..cd0b84c 100644
+--- a/lib/SPIRV/OCLUtil.cpp
++++ b/lib/SPIRV/OCLUtil.cpp
+@@ -132,7 +132,7 @@ unsigned getExtOp(StringRef OrigName, const std::string &GivenDemangledName) {
+   std::string DemangledName = GivenDemangledName;
+   if (!oclIsBuiltin(OrigName, DemangledName.empty() ? &DemangledName : nullptr))
+     return ~0U;
+-  LLVM_DEBUG(dbgs() << "getExtOp: demangled name: " << DemangledName << '\n');
++  DEBUG(dbgs() << "getExtOp: demangled name: " << DemangledName << '\n');
+   OCLExtOpKind EOC;
+   bool Found = OCLExtOpMap::rfind(DemangledName, &EOC);
+   if (!Found) {
+diff --git a/lib/SPIRV/SPIRVLowerBool.cpp b/lib/SPIRV/SPIRVLowerBool.cpp
+index 96adfa5..14a7f05 100644
+--- a/lib/SPIRV/SPIRVLowerBool.cpp
++++ b/lib/SPIRV/SPIRVLowerBool.cpp
+@@ -107,7 +107,7 @@ public:
+     visit(M);
+ 
+     if (SPIRVLowerBoolValidate) {
+-      LLVM_DEBUG(dbgs() << "After SPIRVLowerBool:\n" << M);
++      DEBUG(dbgs() << "After SPIRVLowerBool:\n" << M);
+       std::string Err;
+       raw_string_ostream ErrorOS(Err);
+       if (verifyModule(M, &ErrorOS)) {
+diff --git a/lib/SPIRV/SPIRVLowerConstExpr.cpp b/lib/SPIRV/SPIRVLowerConstExpr.cpp
+index 730f0d9..fc6d39c 100644
+--- a/lib/SPIRV/SPIRVLowerConstExpr.cpp
++++ b/lib/SPIRV/SPIRVLowerConstExpr.cpp
+@@ -92,14 +92,14 @@ bool SPIRVLowerConstExpr::runOnModule(Module &Module) {
+   M = &Module;
+   Ctx = &M->getContext();
+ 
+-  LLVM_DEBUG(dbgs() << "Enter SPIRVLowerConstExpr:\n");
++  DEBUG(dbgs() << "Enter SPIRVLowerConstExpr:\n");
+   visit(M);
+ 
+-  LLVM_DEBUG(dbgs() << "After SPIRVLowerConstExpr:\n" << *M);
++  DEBUG(dbgs() << "After SPIRVLowerConstExpr:\n" << *M);
+   std::string Err;
+   raw_string_ostream ErrorOS(Err);
+   if (verifyModule(*M, &ErrorOS)) {
+-    LLVM_DEBUG(errs() << "Fails to verify module: " << ErrorOS.str());
++    DEBUG(errs() << "Fails to verify module: " << ErrorOS.str());
+   }
+   return true;
+ }
+diff --git a/lib/SPIRV/SPIRVLowerMemmove.cpp b/lib/SPIRV/SPIRVLowerMemmove.cpp
+index 03efb7d..bb60439 100644
+--- a/lib/SPIRV/SPIRVLowerMemmove.cpp
++++ b/lib/SPIRV/SPIRVLowerMemmove.cpp
+@@ -113,7 +113,7 @@ public:
+     visit(M);
+ 
+     if (SPIRVLowerMemmoveValidate) {
+-      LLVM_DEBUG(dbgs() << "After SPIRVLowerMemmove:\n" << M);
++      DEBUG(dbgs() << "After SPIRVLowerMemmove:\n" << M);
+       std::string Err;
+       raw_string_ostream ErrorOS(Err);
+       if (verifyModule(M, &ErrorOS)) {
+diff --git a/lib/SPIRV/SPIRVLowerSPIRBlocks.cpp b/lib/SPIRV/SPIRVLowerSPIRBlocks.cpp
+index 295889a..83a1d26 100644
+--- a/lib/SPIRV/SPIRVLowerSPIRBlocks.cpp
++++ b/lib/SPIRV/SPIRVLowerSPIRBlocks.cpp
+@@ -114,8 +114,8 @@ public:
+     erase(M->getFunction(SPIR_INTRINSIC_GET_BLOCK_INVOKE));
+     erase(M->getFunction(SPIR_INTRINSIC_GET_BLOCK_CONTEXT));
+     erase(M->getFunction(SPIR_INTRINSIC_BLOCK_BIND));
+-    LLVM_DEBUG(dbgs() << "------- After OCLLowerBlocks ------------\n"
+-                      << *M << '\n');
++    DEBUG(dbgs() << "------- After OCLLowerBlocks ------------\n"
++                 << *M << '\n');
+     return true;
+   }
+ 
+@@ -132,9 +132,9 @@ private:
+     int Iter = MaxIter;
+     while (lowerBlockBind(F) && Iter > 0) {
+       Iter--;
+-      LLVM_DEBUG(dbgs() << "-------------- after iteration " << MaxIter - Iter
+-                        << " --------------\n"
+-                        << *M << '\n');
++      DEBUG(dbgs() << "-------------- after iteration " << MaxIter - Iter
++                   << " --------------\n"
++                   << *M << '\n');
+     }
+     assert(Iter > 0 && "Too many iterations");
+     return true;
+@@ -201,7 +201,7 @@ private:
+     bool Changed = false;
+     for (auto I = BlockBindFunc->user_begin(), E = BlockBindFunc->user_end();
+          I != E;) {
+-      LLVM_DEBUG(dbgs() << "[lowerBlockBind] " << **I << '\n');
++      DEBUG(dbgs() << "[lowerBlockBind] " << **I << '\n');
+       // Handle spir_block_bind(bitcast(block_func), context_len,
+       // context_align, context)
+       auto CallBlkBind = cast<CallInst>(*I++);
+@@ -250,8 +250,8 @@ private:
+       getBlockInvokeFuncAndContext(CallGetBlkCtx->getArgOperand(0), nullptr,
+                                    &Ctx);
+     CallGetBlkCtx->replaceAllUsesWith(Ctx);
+-    LLVM_DEBUG(dbgs() << "  [lowerGetBlockContext] " << *CallGetBlkCtx << " => "
+-                      << *Ctx << "\n\n");
++    DEBUG(dbgs() << "  [lowerGetBlockContext] " << *CallGetBlkCtx << " => "
++                 << *Ctx << "\n\n");
+     erase(CallGetBlkCtx);
+   }
+ 
+@@ -266,7 +266,7 @@ private:
+       auto Cast = dyn_cast<BitCastInst>(CallInv);
+       if (Cast)
+         CallInv = dyn_cast<Instruction>(*CallInv->user_begin());
+-      LLVM_DEBUG(dbgs() << "[lowerGetBlockInvoke]  " << *CallInv);
++      DEBUG(dbgs() << "[lowerGetBlockInvoke]  " << *CallInv);
+       // Handle ret = block_func_ptr(context_ptr, args)
+       auto CI = cast<CallInst>(CallInv);
+       auto F = CI->getCalledValue();
+@@ -277,7 +277,7 @@ private:
+       }
+       assert(F->getType() == InvokeF->getType());
+       CI->replaceUsesOfWith(F, InvokeF);
+-      LLVM_DEBUG(dbgs() << " => " << *CI << "\n\n");
++      DEBUG(dbgs() << " => " << *CI << "\n\n");
+       erase(Cast);
+       Changed = true;
+     }
+@@ -340,8 +340,7 @@ private:
+       if (!CI || CI->getCalledFunction() != F)
+         continue;
+ 
+-      LLVM_DEBUG(dbgs() << "[lowerReturnBlock] inline " << F->getName()
+-                        << '\n');
++      DEBUG(dbgs() << "[lowerReturnBlock] inline " << F->getName() << '\n');
+       auto CG = &getAnalysis<CallGraphWrapperPass>().getCallGraph();
+       auto ACT = &getAnalysis<AssumptionCacheTracker>();
+       std::function<AssumptionCache &(Function &)> GetAssumptionCache =
+@@ -534,8 +533,8 @@ private:
+     } else {
+       llvm_unreachable("Invalid block");
+     }
+-    LLVM_DEBUG(dbgs() << "  Block invocation func: " << InvF->getName() << '\n'
+-                      << "  Block context: " << *Ctx << '\n');
++    DEBUG(dbgs() << "  Block invocation func: " << InvF->getName() << '\n'
++                 << "  Block context: " << *Ctx << '\n');
+     assert(InvF && Ctx && "Invalid block");
+     if (PInvF)
+       *PInvF = InvF;
+@@ -606,7 +605,7 @@ private:
+   }
+ 
+   void dumpGetBlockInvokeUsers(StringRef Prompt) {
+-    LLVM_DEBUG(dbgs() << Prompt);
++    DEBUG(dbgs() << Prompt);
+     dumpUsers(M->getFunction(SPIR_INTRINSIC_GET_BLOCK_INVOKE));
+   }
+ };
+diff --git a/lib/SPIRV/SPIRVReader.cpp b/lib/SPIRV/SPIRVReader.cpp
+index 00176af..c3bfdaf 100644
+--- a/lib/SPIRV/SPIRVReader.cpp
++++ b/lib/SPIRV/SPIRVReader.cpp
+@@ -1035,7 +1035,7 @@ bool SPIRVToLLVM::postProcessOCL() {
+   for (auto I = M->begin(), E = M->end(); I != E;) {
+     auto F = I++;
+     if (F->hasName() && F->isDeclaration()) {
+-      LLVM_DEBUG(dbgs() << "[postProcessOCL sret] " << *F << '\n');
++      DEBUG(dbgs() << "[postProcessOCL sret] " << *F << '\n');
+       if (F->getReturnType()->isStructTy() &&
+           oclIsBuiltin(F->getName(), &DemangledName, IsCpp)) {
+         if (!postProcessOCLBuiltinReturnStruct(&(*F)))
+@@ -1046,7 +1046,7 @@ bool SPIRVToLLVM::postProcessOCL() {
+   for (auto I = M->begin(), E = M->end(); I != E;) {
+     auto F = I++;
+     if (F->hasName() && F->isDeclaration()) {
+-      LLVM_DEBUG(dbgs() << "[postProcessOCL array arg] " << *F << '\n');
++      DEBUG(dbgs() << "[postProcessOCL array arg] " << *F << '\n');
+       if (hasArrayArg(&(*F)) &&
+           oclIsBuiltin(F->getName(), &DemangledName, IsCpp))
+         if (!postProcessOCLBuiltinWithArrayArguments(&(*F), DemangledName))
+@@ -1084,8 +1084,7 @@ bool SPIRVToLLVM::postProcessOCLBuiltinReturnStruct(Function *F) {
+ 
+ bool SPIRVToLLVM::postProcessOCLBuiltinWithArrayArguments(
+     Function *F, const std::string &DemangledName) {
+-  LLVM_DEBUG(dbgs() << "[postProcessOCLBuiltinWithArrayArguments] " << *F
+-                    << '\n');
++  DEBUG(dbgs() << "[postProcessOCLBuiltinWithArrayArguments] " << *F << '\n');
+   auto Attrs = F->getAttributes();
+   auto Name = F->getName();
+   mutateFunction(
+@@ -2327,7 +2326,7 @@ Instruction *SPIRVToLLVM::transBuiltinFromInst(const std::string &FuncName,
+            << " => " << *FT << '\n';
+   })
+   if (!Func || Func->getFunctionType() != FT) {
+-    LLVM_DEBUG(for (auto &I : ArgTys) { dbgs() << *I << '\n'; });
++    DEBUG(for (auto &I : ArgTys) { dbgs() << *I << '\n'; });
+     Func = Function::Create(FT, GlobalValue::ExternalLinkage, MangledName, M);
+     Func->setCallingConv(CallingConv::SPIR_FUNC);
+     if (isFuncNoUnwind())
+diff --git a/lib/SPIRV/SPIRVRegularizeLLVM.cpp b/lib/SPIRV/SPIRVRegularizeLLVM.cpp
+index bf80af6..17d71fa 100644
+--- a/lib/SPIRV/SPIRVRegularizeLLVM.cpp
++++ b/lib/SPIRV/SPIRVRegularizeLLVM.cpp
+@@ -94,14 +94,14 @@ bool SPIRVRegularizeLLVM::runOnModule(Module &Module) {
+   M = &Module;
+   Ctx = &M->getContext();
+ 
+-  LLVM_DEBUG(dbgs() << "Enter SPIRVRegularizeLLVM:\n");
++  DEBUG(dbgs() << "Enter SPIRVRegularizeLLVM:\n");
+   regularize();
+ 
+-  LLVM_DEBUG(dbgs() << "After SPIRVRegularizeLLVM:\n" << *M);
++  DEBUG(dbgs() << "After SPIRVRegularizeLLVM:\n" << *M);
+   std::string Err;
+   raw_string_ostream ErrorOS(Err);
+   if (verifyModule(*M, &ErrorOS)) {
+-    LLVM_DEBUG(errs() << "Fails to verify module: " << ErrorOS.str());
++    DEBUG(errs() << "Fails to verify module: " << ErrorOS.str());
+   }
+   return true;
+ }
+@@ -170,7 +170,7 @@ bool SPIRVRegularizeLLVM::regularize() {
+ // Assume F is a SPIR-V builtin function with a function pointer argument which
+ // is a bitcast instruction casting a function to a void(void) function pointer.
+ void SPIRVRegularizeLLVM::lowerFuncPtr(Function *F, Op OC) {
+-  LLVM_DEBUG(dbgs() << "[lowerFuncPtr] " << *F << '\n');
++  DEBUG(dbgs() << "[lowerFuncPtr] " << *F << '\n');
+   auto Name = decorateSPIRVFunction(getName(OC));
+   std::set<Value *> InvokeFuncPtrs;
+   auto Attrs = F->getAttributes();
+diff --git a/lib/SPIRV/SPIRVToOCL20.cpp b/lib/SPIRV/SPIRVToOCL20.cpp
+index 3f1e8d9..4ca9c2b 100644
+--- a/lib/SPIRV/SPIRVToOCL20.cpp
++++ b/lib/SPIRV/SPIRVToOCL20.cpp
+@@ -145,18 +145,18 @@ bool SPIRVToOCL20::runOnModule(Module &Module) {
+ 
+   eraseUselessFunctions(&Module);
+ 
+-  LLVM_DEBUG(dbgs() << "After SPIRVToOCL20:\n" << *M);
++  DEBUG(dbgs() << "After SPIRVToOCL20:\n" << *M);
+ 
+   std::string Err;
+   raw_string_ostream ErrorOS(Err);
+   if (verifyModule(*M, &ErrorOS)) {
+-    LLVM_DEBUG(errs() << "Fails to verify module: " << ErrorOS.str());
++    DEBUG(errs() << "Fails to verify module: " << ErrorOS.str());
+   }
+   return true;
+ }
+ 
+ void SPIRVToOCL20::visitCallInst(CallInst &CI) {
+-  LLVM_DEBUG(dbgs() << "[visistCallInst] " << CI << '\n');
++  DEBUG(dbgs() << "[visistCallInst] " << CI << '\n');
+   auto F = CI.getCalledFunction();
+   if (!F)
+     return;
+@@ -167,8 +167,8 @@ void SPIRVToOCL20::visitCallInst(CallInst &CI) {
+   if (!oclIsBuiltin(MangledName, &DemangledName) ||
+       (OC = getSPIRVFuncOC(DemangledName)) == OpNop)
+     return;
+-  LLVM_DEBUG(dbgs() << "DemangledName = " << DemangledName.c_str() << '\n'
+-                    << "OpCode = " << OC << '\n');
++  DEBUG(dbgs() << "DemangledName = " << DemangledName.c_str() << '\n'
++               << "OpCode = " << OC << '\n');
+ 
+   if (OC == OpImageQuerySize || OC == OpImageQuerySizeLod) {
+     visitCallSPRIVImageQuerySize(&CI);
+diff --git a/lib/SPIRV/SPIRVUtil.cpp b/lib/SPIRV/SPIRVUtil.cpp
+index cb0f188..435ab7a 100644
+--- a/lib/SPIRV/SPIRVUtil.cpp
++++ b/lib/SPIRV/SPIRVUtil.cpp
+@@ -307,15 +307,13 @@ Function *getOrCreateFunction(Module *M, Type *RetTy, ArrayRef<Type *> ArgTypes,
+         Function::Create(FT, GlobalValue::ExternalLinkage, MangledName, M);
+     if (F && TakeName) {
+       NewF->takeName(F);
+-      LLVM_DEBUG(
+-          dbgs() << "[getOrCreateFunction] Warning: taking function Name\n");
++      DEBUG(dbgs() << "[getOrCreateFunction] Warning: taking function Name\n");
+     }
+     if (NewF->getName() != MangledName) {
+-      LLVM_DEBUG(
+-          dbgs() << "[getOrCreateFunction] Warning: function Name changed\n");
++      DEBUG(dbgs() << "[getOrCreateFunction] Warning: function Name changed\n");
+     }
+-    LLVM_DEBUG(dbgs() << "[getOrCreateFunction] ";
+-               if (F) dbgs() << *F << " => "; dbgs() << *NewF << '\n';);
++    DEBUG(dbgs() << "[getOrCreateFunction] "; if (F) dbgs() << *F << " => ";
++          dbgs() << *NewF << '\n';);
+     F = NewF;
+     F->setCallingConv(CallingConv::SPIR_FUNC);
+     if (Attrs)
+@@ -575,7 +573,7 @@ bool isFunctionPointerType(Type *T) {
+ bool hasFunctionPointerArg(Function *F, Function::arg_iterator &AI) {
+   AI = F->arg_begin();
+   for (auto AE = F->arg_end(); AI != AE; ++AI) {
+-    LLVM_DEBUG(dbgs() << "[hasFuncPointerArg] " << *AI << '\n');
++    DEBUG(dbgs() << "[hasFuncPointerArg] " << *AI << '\n');
+     if (isFunctionPointerType(AI->getType())) {
+       return true;
+     }
+@@ -590,7 +588,7 @@ Constant *castToVoidFuncPtr(Function *F) {
+ 
+ bool hasArrayArg(Function *F) {
+   for (auto I = F->arg_begin(), E = F->arg_end(); I != E; ++I) {
+-    LLVM_DEBUG(dbgs() << "[hasArrayArg] " << *I << '\n');
++    DEBUG(dbgs() << "[hasArrayArg] " << *I << '\n');
+     if (I->getType()->isArrayTy()) {
+       return true;
+     }
+@@ -602,7 +600,7 @@ CallInst *mutateCallInst(
+     Module *M, CallInst *CI,
+     std::function<std::string(CallInst *, std::vector<Value *> &)> ArgMutate,
+     BuiltinFuncMangleInfo *Mangle, AttributeList *Attrs, bool TakeFuncName) {
+-  LLVM_DEBUG(dbgs() << "[mutateCallInst] " << *CI);
++  DEBUG(dbgs() << "[mutateCallInst] " << *CI);
+ 
+   auto Args = getArguments(CI);
+   auto NewName = ArgMutate(CI, Args);
+@@ -613,7 +611,7 @@ CallInst *mutateCallInst(
+   }
+   auto NewCI = addCallInst(M, NewName, CI->getType(), Args, Attrs, CI, Mangle,
+                            InstName, TakeFuncName);
+-  LLVM_DEBUG(dbgs() << " => " << *NewCI << '\n');
++  DEBUG(dbgs() << " => " << *NewCI << '\n');
+   CI->replaceAllUsesWith(NewCI);
+   CI->eraseFromParent();
+   return NewCI;
+@@ -625,7 +623,7 @@ Instruction *mutateCallInst(
+         ArgMutate,
+     std::function<Instruction *(CallInst *)> RetMutate,
+     BuiltinFuncMangleInfo *Mangle, AttributeList *Attrs, bool TakeFuncName) {
+-  LLVM_DEBUG(dbgs() << "[mutateCallInst] " << *CI);
++  DEBUG(dbgs() << "[mutateCallInst] " << *CI);
+ 
+   auto Args = getArguments(CI);
+   Type *RetTy = CI->getType();
+@@ -639,7 +637,7 @@ Instruction *mutateCallInst(
+                            InstName + ".tmp", TakeFuncName);
+   auto NewI = RetMutate(NewCI);
+   NewI->takeName(CI);
+-  LLVM_DEBUG(dbgs() << " => " << *NewI << '\n');
++  DEBUG(dbgs() << " => " << *NewI << '\n');
+   CI->replaceAllUsesWith(NewI);
+   CI->eraseFromParent();
+   return NewI;
+@@ -997,7 +995,7 @@ static SPIR::RefParamType transTypeDesc(Type *Ty,
+       assert(isVoidFuncTy(cast<FunctionType>(ET)) && "Not supported");
+       EPT = new SPIR::BlockType;
+     } else if (auto StructTy = dyn_cast<StructType>(ET)) {
+-      LLVM_DEBUG(dbgs() << "ptr to struct: " << *Ty << '\n');
++      DEBUG(dbgs() << "ptr to struct: " << *Ty << '\n');
+       auto TyName = StructTy->getStructName();
+       if (TyName.startswith(kSPR2TypeName::ImagePrefix) ||
+           TyName.startswith(kSPR2TypeName::Pipe)) {
+@@ -1006,7 +1004,7 @@ static SPIR::RefParamType transTypeDesc(Type *Ty,
+         if (DelimPos != StringRef::npos)
+           TyName = TyName.substr(0, DelimPos);
+       }
+-      LLVM_DEBUG(dbgs() << "  type Name: " << TyName << '\n');
++      DEBUG(dbgs() << "  type Name: " << TyName << '\n');
+ 
+       auto Prim = getOCLTypePrimitiveEnum(TyName);
+       if (StructTy->isOpaque()) {
+@@ -1053,7 +1051,7 @@ static SPIR::RefParamType transTypeDesc(Type *Ty,
+       PT->setQualifier(static_cast<SPIR::TypeAttributeEnum>(I), I & Attr);
+     return SPIR::RefParamType(PT);
+   }
+-  LLVM_DEBUG(dbgs() << "[transTypeDesc] " << *Ty << '\n');
++  DEBUG(dbgs() << "[transTypeDesc] " << *Ty << '\n');
+   assert(0 && "not implemented");
+   return SPIR::RefParamType(new SPIR::PrimitiveType(SPIR::PRIMITIVE_INT));
+ }
+@@ -1101,8 +1099,8 @@ Value *getScalarOrArrayConstantInt(Instruction *Pos, Type *T, unsigned Len,
+     auto Zero = ConstantInt::getNullValue(Type::getInt32Ty(T->getContext()));
+     Value *Index[] = {Zero, Zero};
+     auto Ret = GetElementPtrInst::CreateInBounds(Alloca, Index, "", Pos);
+-    LLVM_DEBUG(dbgs() << "[getScalarOrArrayConstantInt] Alloca: " << *Alloca
+-                      << ", Return: " << *Ret << '\n');
++    DEBUG(dbgs() << "[getScalarOrArrayConstantInt] Alloca: " << *Alloca
++                 << ", Return: " << *Ret << '\n');
+     return Ret;
+   }
+   if (auto AT = dyn_cast<ArrayType>(T)) {
+@@ -1110,8 +1108,8 @@ Value *getScalarOrArrayConstantInt(Instruction *Pos, Type *T, unsigned Len,
+     assert(AT->getArrayNumElements() == Len);
+     std::vector<Constant *> EV(Len, ConstantInt::get(ET, V, IsSigned));
+     auto Ret = ConstantArray::get(AT, EV);
+-    LLVM_DEBUG(dbgs() << "[getScalarOrArrayConstantInt] Array type: " << *AT
+-                      << ", Return: " << *Ret << '\n');
++    DEBUG(dbgs() << "[getScalarOrArrayConstantInt] Array type: " << *AT
++                 << ", Return: " << *Ret << '\n');
+     return Ret;
+   }
+   llvm_unreachable("Invalid type");
+@@ -1121,9 +1119,9 @@ Value *getScalarOrArrayConstantInt(Instruction *Pos, Type *T, unsigned Len,
+ void dumpUsers(Value *V, StringRef Prompt) {
+   if (!V)
+     return;
+-  LLVM_DEBUG(dbgs() << Prompt << " Users of " << *V << " :\n");
++  DEBUG(dbgs() << Prompt << " Users of " << *V << " :\n");
+   for (auto UI = V->user_begin(), UE = V->user_end(); UI != UE; ++UI)
+-    LLVM_DEBUG(dbgs() << "  " << **UI << '\n');
++    DEBUG(dbgs() << "  " << **UI << '\n');
+ }
+ 
+ std::string getSPIRVTypeName(StringRef BaseName, StringRef Postfixes) {
+@@ -1147,7 +1145,7 @@ Type *getSPIRVTypeByChangeBaseTypeName(Module *M, Type *T, StringRef OldName,
+   StringRef Postfixes;
+   if (isSPIRVType(T, OldName, &Postfixes))
+     return getOrCreateOpaquePtrType(M, getSPIRVTypeName(NewName, Postfixes));
+-  LLVM_DEBUG(dbgs() << " Invalid SPIR-V type " << *T << '\n');
++  DEBUG(dbgs() << " Invalid SPIR-V type " << *T << '\n');
+   llvm_unreachable("Invalid SPIRV-V type");
+   return nullptr;
+ }
+@@ -1227,16 +1225,16 @@ std::string mapOCLTypeNameToSPIRV(StringRef Name, StringRef Acc) {
+     if (hasAccessQualifiedName(Name))
+       ImageTyName.erase(ImageTyName.size() - 5, 3);
+     auto Desc = map<SPIRVTypeImageDescriptor>(ImageTyName);
+-    LLVM_DEBUG(dbgs() << "[trans image type] " << SubStrs[1] << " => "
+-                      << "(" << (unsigned)Desc.Dim << ", " << Desc.Depth << ", "
+-                      << Desc.Arrayed << ", " << Desc.MS << ", " << Desc.Sampled
+-                      << ", " << Desc.Format << ")\n");
++    DEBUG(dbgs() << "[trans image type] " << SubStrs[1] << " => "
++                 << "(" << (unsigned)Desc.Dim << ", " << Desc.Depth << ", "
++                 << Desc.Arrayed << ", " << Desc.MS << ", " << Desc.Sampled
++                 << ", " << Desc.Format << ")\n");
+ 
+     BaseTy = kSPIRVTypeName::Image;
+     OS << getSPIRVImageTypePostfixes(kSPIRVImageSampledTypeName::Void, Desc,
+                                      SPIRSPIRVAccessQualifierMap::map(Acc));
+   } else {
+-    LLVM_DEBUG(dbgs() << "Mapping of " << Name << " is not implemented\n");
++    DEBUG(dbgs() << "Mapping of " << Name << " is not implemented\n");
+     llvm_unreachable("Not implemented");
+   }
+   return getSPIRVTypeName(BaseTy, OS.str());
+@@ -1260,7 +1258,7 @@ bool eraseIfNoUse(Function *F) {
+     }
+   }
+   if (F->use_empty()) {
+-    LLVM_DEBUG(dbgs() << "Erase "; F->printAsOperand(dbgs()); dbgs() << '\n');
++    DEBUG(dbgs() << "Erase "; F->printAsOperand(dbgs()); dbgs() << '\n');
+     F->eraseFromParent();
+     Changed = true;
+   }
+@@ -1314,7 +1312,7 @@ std::string mangleBuiltin(const std::string &UniqName,
+     return UniqName;
+   BtnInfo->init(UniqName);
+   std::string MangledName;
+-  LLVM_DEBUG(dbgs() << "[mangle] " << UniqName << " => ");
++  DEBUG(dbgs() << "[mangle] " << UniqName << " => ");
+   SPIR::FunctionDescriptor FD;
+   FD.Name = BtnInfo->getUnmangledName();
+   bool BIVarArgNegative = BtnInfo->getVarArg() < 0;
+@@ -1355,7 +1353,7 @@ std::string mangleBuiltin(const std::string &UniqName,
+   }
+ #endif
+ 
+-  LLVM_DEBUG(dbgs() << MangledName << '\n');
++  DEBUG(dbgs() << MangledName << '\n');
+   return MangledName;
+ }
+ 
+diff --git a/lib/SPIRV/SPIRVWriter.cpp b/lib/SPIRV/SPIRVWriter.cpp
+index f4a5d71..0708c9e 100644
+--- a/lib/SPIRV/SPIRVWriter.cpp
++++ b/lib/SPIRV/SPIRVWriter.cpp
+@@ -335,8 +335,8 @@ bool LLVMToSPIRV::isBuiltinTransToExtInst(Function *F,
+   std::string DemangledName;
+   if (!oclIsBuiltin(OrigName, &DemangledName))
+     return false;
+-  LLVM_DEBUG(dbgs() << "[oclIsBuiltinTransToExtInst] CallInst: demangled name: "
+-                    << DemangledName << '\n');
++  DEBUG(dbgs() << "[oclIsBuiltinTransToExtInst] CallInst: demangled name: "
++               << DemangledName << '\n');
+   StringRef S = DemangledName;
+   if (!S.startswith(kSPIRVName::Prefix))
+     return false;
+diff --git a/lib/SPIRV/TransOCLMD.cpp b/lib/SPIRV/TransOCLMD.cpp
+index b592d5a..bc85999 100644
+--- a/lib/SPIRV/TransOCLMD.cpp
++++ b/lib/SPIRV/TransOCLMD.cpp
+@@ -91,14 +91,14 @@ bool TransOCLMD::runOnModule(Module &Module) {
+   if (CLVer == 0)
+     return false;
+ 
+-  LLVM_DEBUG(dbgs() << "Enter TransOCLMD:\n");
++  DEBUG(dbgs() << "Enter TransOCLMD:\n");
+   visit(M);
+ 
+-  LLVM_DEBUG(dbgs() << "After TransOCLMD:\n" << *M);
++  DEBUG(dbgs() << "After TransOCLMD:\n" << *M);
+   std::string Err;
+   raw_string_ostream ErrorOS(Err);
+   if (verifyModule(*M, &ErrorOS)) {
+-    LLVM_DEBUG(errs() << "Fails to verify module: " << ErrorOS.str());
++    DEBUG(errs() << "Fails to verify module: " << ErrorOS.str());
+   }
+   return true;
+ }
+diff --git a/tools/llvm-spirv/llvm-spirv.cpp b/tools/llvm-spirv/llvm-spirv.cpp
+index d0b4ba0..2fbf389 100644
+--- a/tools/llvm-spirv/llvm-spirv.cpp
++++ b/tools/llvm-spirv/llvm-spirv.cpp
+@@ -159,7 +159,7 @@ static int convertSPIRVToLLVM() {
+     return -1;
+   }
+ 
+-  LLVM_DEBUG(dbgs() << "Converted LLVM module:\n" << *M);
++  DEBUG(dbgs() << "Converted LLVM module:\n" << *M);
+ 
+   raw_string_ostream ErrorOS(Err);
+   if (verifyModule(*M, &ErrorOS)) {
+-- 
+1.8.3.1
+
