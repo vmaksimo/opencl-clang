@@ -124,9 +124,10 @@ function(apply_patches repo_dir patches_dir)
 endfunction()
 
 set(CLANG_SOURCE_DIR ${LLVM_SOURCE_DIR}/tools/clang)
+set(SPIRV_SOURCE_DIR ${LLVM_SOURCE_DIR}/projects/spirv-llvm-translator)
 apply_patches(${CLANG_SOURCE_DIR}
               ${CMAKE_CURRENT_SOURCE_DIR}/patches/clang)
-apply_patches(${LLVM_SOURCE_DIR}/projects/spirv-llvm-translator
+apply_patches(${SPIRV_SOURCE_DIR}
               ${CMAKE_CURRENT_SOURCE_DIR}/patches/SPIRV-LLVM-Translator)
 
 #
@@ -187,6 +188,7 @@ include_directories( AFTER
             ${LLVM_SOURCE_DIR}/include
             ${CMAKE_CURRENT_BINARY_DIR}
             ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR}
+            ${SPIRV_SOURCE_DIR}/include
             )
 
 link_directories(
@@ -219,33 +221,33 @@ install(FILES
 target_link_libraries( ${TARGET_NAME}
                        LINK_PRIVATE
                        LLVMAnalysis
+                       LLVMAsmParser
+                       LLVMAsmPrinter
                        LLVMBitReader
+                       LLVMBitWriter
                        LLVMCodeGen
                        LLVMCore
-                       LLVMipo
+                       LLVMIRReader
                        LLVMInstCombine
                        LLVMInstrumentation
                        LLVMMC
+                       LLVMMCDisassembler
                        LLVMMCParser
                        LLVMObjCARCOpts
+                       LLVMObject
                        LLVMOption
+                       LLVMProfileData
+                       LLVMSPIRVLib
                        LLVMScalarOpts
+                       LLVMSelectionDAG
                        LLVMSupport
+                       LLVMTarget
                        LLVMTransformUtils
                        LLVMVectorize
-                       LLVMAsmPrinter
-                       LLVMSelectionDAG
-                       LLVMMCDisassembler
-                       LLVMProfileData
-                       LLVMObject
-                       LLVMBitWriter
-                       LLVMIRReader
-                       LLVMAsmParser
-                       LLVMTarget
-#                       LLVMSPIRVLib
-                       clangAnalysis
+                       LLVMipo
                        clangARCMigrate
                        clangAST
+                       clangAnalysis
                        clangBasic
                        clangCodeGen
                        clangDriver
@@ -258,9 +260,9 @@ target_link_libraries( ${TARGET_NAME}
                        clangRewriteFrontend
                        clangSema
                        clangSerialization
-                       clangStaticAnalyzerFrontend
                        clangStaticAnalyzerCheckers
                        clangStaticAnalyzerCore
+                       clangStaticAnalyzerFrontend
                        ${CMAKE_DL_LIBS}
                       )
 
